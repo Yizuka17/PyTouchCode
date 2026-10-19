@@ -1,0 +1,7 @@
+debugpy==1.8.21
+jedi==0.19.2
+mpremote==1.27.0
+parso==0.8.7
+platformdirs==4.13.5
+pyserial==3.5
+ruff==0.14.14

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>PyTouch.App</RootNamespace><AssemblyName>PyTouchCode</AssemblyName><Product>PyTouchCode</Product><Title>PyTouchCode</Title>
+    <Version>0.1.3</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/PyTouch.ico</ApplicationIcon>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <PublishReadyToRun>false</PublishReadyToRun>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7627" />
+    <PackageReference Include="WinUIEdit" Version="0.0.5-prerelease" />
+    <ProjectReference Include="../PyTouch.Core/PyTouch.Core.csproj" />
+    <Content Include="../../tools/python_bridge.py" Link="tools/python_bridge.py" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../tools/serial_repl.py" Link="tools/serial_repl.py" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../scripts/extract_tcltk.py" Link="tools/extract_tcltk.py" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../runtime/python/**/*" Exclude="../../runtime/python/**/__pycache__/**" Link="runtime/python/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets/**/*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="ThirdPartyNotices/*" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../docs/*" Link="docs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
+
+
+

@@ -1,0 +1,2 @@
+Fluent UI System Icons, Microsoft Corporation, MIT license. Source: https://github.com/microsoft/fluentui-system-icons/tree/69fc5f64ff5fbfbf49d56ac881de6e344bf30fc2 . Original 20 px assets; paths are used without modification.
+DocumentDark.svg adapts the foreground color for dark mode without changing the geometry.
