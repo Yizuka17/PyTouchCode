@@ -1,4 +1,4 @@
-<Window x:Class="PyTouch.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+<Window x:Class="PyTouch.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:PyTouch.App">
  <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
   <Grid.RowDefinitions><RowDefinition Height="40"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="30"/></Grid.RowDefinitions>
   <Grid x:Name="TitleBar" Padding="16,0,150,0" ColumnSpacing="12">
@@ -57,12 +57,14 @@
      <PivotItem Header="文件"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Content="打开文件夹" HorizontalAlignment="Stretch" Tag="folder" Click="MenuAction"/><Button x:Name="RefreshFilesButton" Grid.Column="1" Tag="refresh" Click="MenuAction" ToolTipService.ToolTip="刷新文件树" AutomationProperties.Name="刷新文件树"></Button></Grid>
       <TreeView x:Name="FileTree" Grid.Row="1" SelectionMode="Single" ItemInvoked="FileInvoked" Expanding="FileExpanding" Collapsed="FileCollapsed">
-       <!-- TreeViewNode.Content stores our Image + filename StackPanel.
-            Without an ItemTemplate WinUI renders StackPanel.ToString()
-            ("Microsoft.UI.Xaml.Controls.StackPanel") instead of the row. -->
+       <!-- A TreeViewNode stores FileTreeEntry data, never a shared UIElement.
+            WinUI creates/recycles the visual row from this template. -->
        <TreeView.ItemTemplate>
         <DataTemplate x:DataType="TreeViewNode">
-         <ContentPresenter Content="{x:Bind Content}"/>
+         <StackPanel Orientation="Horizontal" Spacing="8" ToolTipService.ToolTip="{x:Bind ((local:FileTreeEntry)Content).Path}">
+          <Image Width="20" Height="20" Source="{x:Bind ((local:FileTreeEntry)Content).IconSource, Mode=OneWay}"/>
+          <TextBlock Text="{x:Bind ((local:FileTreeEntry)Content).Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+         </StackPanel>
         </DataTemplate>
        </TreeView.ItemTemplate>
       </TreeView>
