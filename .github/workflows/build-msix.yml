@@ -57,8 +57,16 @@ jobs:
           $sdk = Join-Path $env:USERPROFILE '.nuget/packages/microsoft.windows.sdk.buildtools/10.0.26100.7627/bin/10.0.26100.0/x64'
           & (Join-Path $sdk 'signtool.exe') verify /pa $msix
           if ($LASTEXITCODE) { throw 'MSIX signature verification failed' }
-          & (Join-Path $sdk 'makeappx.exe') validate /p $msix
-          if ($LASTEXITCODE) { throw 'MSIX package validation failed' }
+          # MakeAppx performs semantic validation while packing; it has no
+          # separate "validate" subcommand. Inspect the archive structure here.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $msix).Path)
+          try {
+            $entries = @($archive.Entries | ForEach-Object FullName)
+            foreach ($required in @('AppxManifest.xml', 'resources.pri', 'PyTouchCode.exe', 'Microsoft.UI.Xaml.dll')) {
+              if ($entries -notcontains $required) { throw "MSIX archive is missing $required" }
+            }
+          } finally { $archive.Dispose() }
           Copy-Item ./scripts/Install.ps1 ./artifacts/Install.ps1 -Force
           Get-FileHash $msix -Algorithm SHA256 | Format-List
 
