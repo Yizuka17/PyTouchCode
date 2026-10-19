@@ -36,7 +36,7 @@
        Always publish it, including for the portable build. -->
   <Target Name="IncludePyTouchPriInPublish"
           BeforeTargets="ComputeResolvedFilesToPublishList"
-          DependsOnTargets="GenerateProjectPriFile"
+          DependsOnTargets="$(GenerateProjectPriFile)"
           Condition="'$(WindowsPackageType)' == 'None'">
     <ItemGroup>
       <ResolvedFileToPublish Include="$(ProjectPriFullPath)"
