@@ -50,7 +50,8 @@ $priDump = Join-Path $root "artifacts/msix-pri-$appVersion.xml"
 if ($LASTEXITCODE) { throw 'Unable to dump package resources.pri' }
 [xml]$priXml = Get-Content $priDump -Raw
 $map = $priXml.SelectSingleNode('/*[local-name()="PriInfo"]/*[local-name()="ResourceMap"]')
-if ($null -eq $map -or $map.GetAttribute('name') -cne $packageName) {
+if ($null -eq $map) { throw 'MSIX PRI dump contains no primary ResourceMap.' }
+if ($map.GetAttribute('name') -cne $packageName) {
     throw "MSIX PRI resource map must be '$packageName' but was '$($map.GetAttribute('name'))'."
 }
 $priText = Get-Content $priDump -Raw
