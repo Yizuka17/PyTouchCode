@@ -32,6 +32,20 @@
     <Content Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../docs/*" Link="docs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- WindowsAppSDK's unpackaged publish path may omit the app's own PRI.
+       Always publish it, including for the portable build. -->
+  <Target Name="IncludePyTouchPriInPublish"
+          BeforeTargets="ComputeResolvedFilesToPublishList"
+          DependsOnTargets="GenerateProjectPriFile"
+          Condition="'$(WindowsPackageType)' == 'None'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(ProjectPriFullPath)"
+                             Condition="Exists('$(ProjectPriFullPath)')">
+        <RelativePath>$(ProjectPriFileName)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 </Project>
 
 
