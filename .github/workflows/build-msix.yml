@@ -55,8 +55,23 @@ jobs:
             if (!(Test-Path -LiteralPath $path)) { throw "Missing build artifact: $path" }
           }
           $sdk = Join-Path $env:USERPROFILE '.nuget/packages/microsoft.windows.sdk.buildtools/10.0.26100.7627/bin/10.0.26100.0/x64'
-          & (Join-Path $sdk 'signtool.exe') verify /pa $msix
-          if ($LASTEXITCODE) { throw 'MSIX signature verification failed' }
+          # This CI job generates a self-signed developer certificate. Trust it
+          # temporarily in the ephemeral runner, verify, then remove the trust.
+          # Do not persist a trust anchor or private key as a GitHub artifact.
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            (Resolve-Path $cer).Path
+          )
+          $trustedRoot = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            'Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
+          try {
+            $trustedRoot.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $trustedRoot.Add($cert)
+            & (Join-Path $sdk 'signtool.exe') verify /pa /v $msix
+            if ($LASTEXITCODE) { throw 'MSIX signature verification failed' }
+          } finally {
+            try { $trustedRoot.Remove($cert) } finally { $trustedRoot.Close() }
+          }
           # MakeAppx performs semantic validation while packing; it has no
           # separate "validate" subcommand. Inspect the archive structure here.
           Add-Type -AssemblyName System.IO.Compression.FileSystem
