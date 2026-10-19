@@ -13,8 +13,12 @@ $project = Join-Path $root 'src/PyTouch.App/PyTouch.App.csproj'
 $portableOutput = Join-Path $root "artifacts/publish-$appVersion"
 dotnet publish $project -c Release -p:Platform=x64 -o $portableOutput -v:minimal
 if ($LASTEXITCODE) { throw 'Portable publish failed' }
-if (!(Test-Path (Join-Path $portableOutput 'PyTouchCode.pri'))) {
-    throw 'Portable publish did not include PyTouchCode.pri. The WinUI XAML index is required.'
+# MSBuild may name the unpackaged PRI after the project (PyTouch.App)
+# rather than AssemblyName (PyTouchCode), depending on SDK tooling.
+$appPriFiles = @(Get-ChildItem -LiteralPath $portableOutput -Filter '*.pri' -File |
+    Where-Object { $_.Name -like 'PyTouch*.pri' })
+if ($appPriFiles.Count -eq 0) {
+    throw 'Portable publish did not include its own PyTouch .pri. The WinUI XAML index is required.'
 }
 
 # Rebuild the resource index for *package identity*. Simply packing the above
