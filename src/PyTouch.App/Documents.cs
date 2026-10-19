@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using System.ComponentModel;
 using PyTouch.Core;
 using Windows.Storage.Pickers;
 using WinUIEditor;
@@ -147,25 +148,25 @@ public sealed partial class MainWindow
     {
         FileTree.RootNodes.Clear(); ViewModel.WorkspaceLabel = Directory.Exists(settings.Workspace) ? settings.Workspace : "Python 工作区";
         if (!Directory.Exists(settings.Workspace)) return;
-        var node = CreateFileNode(new FileNode(settings.Workspace, true)); FileTree.RootNodes.Add(node);
+        var node = CreateFileNode(new FileTreeEntry(settings.Workspace, true)); FileTree.RootNodes.Add(node);
         await LoadChildrenAsync(node); node.IsExpanded = true;
     }
     async Task LoadChildrenAsync(TreeViewNode node)
     {
-        if (node.Content is not FrameworkElement { Tag: FileNode value } || !value.Directory) return;
+        if (node.Content is not FileTreeEntry { Directory: true } value) return;
         var entries = await Task.Run(() =>
         {
             var directory = new DirectoryInfo(value.Path);
             return directory.EnumerateFileSystemInfos().Where(x => (x.Attributes & FileAttributes.ReparsePoint) == 0 && x.Name is not (".git" or "__pycache__" or ".venv" or "node_modules"))
                 .OrderByDescending(x => (x.Attributes & FileAttributes.Directory) != 0).ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase).Take(2000)
-                .Select(x => new FileNode(x.FullName, (x.Attributes & FileAttributes.Directory) != 0)).ToList();
+                .Select(x => new FileTreeEntry(x.FullName, (x.Attributes & FileAttributes.Directory) != 0)).ToList();
         });
         node.Children.Clear(); foreach (var entry in entries) node.Children.Add(CreateFileNode(entry));
         node.HasUnrealizedChildren = false;
     }
     async void FileExpanding(TreeView sender, TreeViewExpandingEventArgs args) { UpdateFolderImage(args.Node, true); if (args.Node.HasUnrealizedChildren) await SafeAsync(() => LoadChildrenAsync(args.Node)); }
     void FileCollapsed(TreeView sender, TreeViewCollapsedEventArgs args) => UpdateFolderImage(args.Node, false);
-    async void FileInvoked(TreeView sender, TreeViewItemInvokedEventArgs args) { if (args.InvokedItem is TreeViewNode { Content: FrameworkElement { Tag: FileNode { Directory: false } file } }) await SafeAsync(() => OpenDocumentAsync(file.Path)); }
+    async void FileInvoked(TreeView sender, TreeViewItemInvokedEventArgs args) { if (args.InvokedItem is TreeViewNode { Content: FileTreeEntry { Directory: false } file }) await SafeAsync(() => OpenDocumentAsync(file.Path)); }
     void RefreshRecent()
     {
         RecentMenu.Items.Clear();
@@ -175,19 +176,17 @@ public sealed partial class MainWindow
         ApplyMenuFonts();
         if (RecentMenu.Items.Count == 0) RecentMenu.Items.Add(new MenuFlyoutItem { Text = "尚无最近文件", IsEnabled = false });
     }
-    sealed record FileNode(string Path, bool Directory);
-    static TreeViewNode CreateFileNode(FileNode file)
+    // Content must be DATA, not a UIElement. TreeView virtualizes/recycles rows
+    // while expanding and cannot safely reparent a shared StackPanel as content.
+    static TreeViewNode CreateFileNode(FileTreeEntry file)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Tag = file };
-        row.Children.Add(new Image { Width = 20, Height = 20, Source = FileImage(FileIcons.Resolve(file.Path, file.Directory)) });
-        string name = System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(file.Path));
-        row.Children.Add(new TextBlock { Text = name.Length > 0 ? name : file.Path, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
-        ToolTipService.SetToolTip(row, file.Path);
-        return new TreeViewNode { Content = row, HasUnrealizedChildren = file.Directory };
+        file.IconSource = FileImage(FileIcons.Resolve(file.Path, file.Directory));
+        return new TreeViewNode { Content = file, HasUnrealizedChildren = file.Directory };
     }
     static void UpdateFolderImage(TreeViewNode node, bool expanded)
     {
-        if (node.Content is StackPanel { Tag: FileNode { Directory: true } file } row) ((Image)row.Children[0]).Source = FileImage(FileIcons.Resolve(file.Path, true, expanded));
+        if (node.Content is FileTreeEntry { Directory: true } file)
+            file.IconSource = FileImage(FileIcons.Resolve(file.Path, true, expanded));
     }
     async Task<ContentDialogResult> ShowDialogAsync(ContentDialog dialog)
     {
@@ -200,3 +199,30 @@ public sealed partial class MainWindow
 
 
 
+
+public sealed class FileTreeEntry : INotifyPropertyChanged
+{
+    public FileTreeEntry(string path, bool directory)
+    {
+        Path = path;
+        Directory = directory;
+        string name = System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(path));
+        Name = name.Length > 0 ? name : path;
+    }
+
+    public string Path { get; }
+    public bool Directory { get; }
+    public string Name { get; }
+    private ImageSource? iconSource;
+    public ImageSource? IconSource
+    {
+        get => iconSource;
+        set
+        {
+            if (ReferenceEquals(iconSource, value)) return;
+            iconSource = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IconSource)));
+        }
+    }
+    public event PropertyChangedEventHandler? PropertyChanged;
+}
