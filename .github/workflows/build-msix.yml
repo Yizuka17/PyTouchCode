@@ -1,13 +1,15 @@
 name: Build PyTouchCode MSIX
 
 on:
-  push:
-    branches:
-      - fix/msix-xaml-resource-index
   pull_request:
     branches:
       - main
   workflow_dispatch:
+
+# Avoid spending Windows runner time on superseded commits of the same PR.
+concurrency:
+  group: pytouch-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
