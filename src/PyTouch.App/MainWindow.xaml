@@ -56,7 +56,16 @@
     <Pivot x:Name="SidebarPivot">
      <PivotItem Header="文件"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Content="打开文件夹" HorizontalAlignment="Stretch" Tag="folder" Click="MenuAction"/><Button x:Name="RefreshFilesButton" Grid.Column="1" Tag="refresh" Click="MenuAction" ToolTipService.ToolTip="刷新文件树" AutomationProperties.Name="刷新文件树"></Button></Grid>
-      <TreeView x:Name="FileTree" Grid.Row="1" SelectionMode="Single" ItemInvoked="FileInvoked" Expanding="FileExpanding" Collapsed="FileCollapsed"/>
+      <TreeView x:Name="FileTree" Grid.Row="1" SelectionMode="Single" ItemInvoked="FileInvoked" Expanding="FileExpanding" Collapsed="FileCollapsed">
+       <!-- TreeViewNode.Content stores our Image + filename StackPanel.
+            Without an ItemTemplate WinUI renders StackPanel.ToString()
+            ("Microsoft.UI.Xaml.Controls.StackPanel") instead of the row. -->
+       <TreeView.ItemTemplate>
+        <DataTemplate x:DataType="TreeViewNode">
+         <ContentPresenter Content="{x:Bind Content}"/>
+        </DataTemplate>
+       </TreeView.ItemTemplate>
+      </TreeView>
      </Grid></PivotItem>
      <PivotItem Header="调试"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <StackPanel Spacing="8"><TextBlock x:Name="DebugState" Text="尚未启动调试" TextWrapping="Wrap"/><StackPanel Orientation="Horizontal" Spacing="4"><Button Content="继续" Tag="continue" Click="MenuAction"/><Button Content="跳过" Tag="next" Click="MenuAction"/><Button Content="进入" Tag="stepIn" Click="MenuAction"/></StackPanel></StackPanel>
