@@ -222,13 +222,20 @@ public sealed partial class MainWindow
         {
             string folder = Path.Combine(directory, "icon-types"); Directory.CreateDirectory(Path.Combine(folder, "subfolder"));
             foreach (string name in new[] { "MAIN.PY", "data.csv", "logic.cpp", "notes.unknown" }) await File.WriteAllTextAsync(Path.Combine(folder, name), "# icon test\n");
+            await File.WriteAllTextAsync(Path.Combine(folder, "subfolder", "nested.py"), "print('nested')\n");
             settings.Workspace = folder; await RefreshFilesAsync();
             var root = FileTree.RootNodes[0];
-            Assert(root.Content is StackPanel && root.Children.All(n => n.Content is StackPanel { Tag: FileNode }), "Tree does not display icon + filename rows");
+            Assert(root.Content is FileTreeEntry && root.Children.All(n => n.Content is FileTreeEntry), "Tree nodes must contain file data rather than shared UI elements");
             root.IsExpanded = false; await Task.Delay(50);
-            Assert(((SvgImageSource)((Image)((StackPanel)root.Content).Children[0]).Source).UriSource.AbsolutePath.EndsWith("folder.svg"), "Collapsed folder icon did not update");
+            Assert(((SvgImageSource)((FileTreeEntry)root.Content).IconSource!).UriSource.AbsolutePath.EndsWith("folder.svg"), "Collapsed folder icon did not update");
             root.IsExpanded = true; await Task.Delay(50);
-            Assert(((SvgImageSource)((Image)((StackPanel)root.Content).Children[0]).Source).UriSource.AbsolutePath.EndsWith("folder-open.svg"), "Expanded folder icon did not update");
+            Assert(((SvgImageSource)((FileTreeEntry)root.Content).IconSource!).UriSource.AbsolutePath.EndsWith("folder-open.svg"), "Expanded folder icon did not update");
+            // Regression: load nested nodes by expanding the actual live TreeView.
+            var subfolder = root.Children.First(n => n.Content is FileTreeEntry { Name: "subfolder" });
+            Assert(subfolder.HasUnrealizedChildren, "Subfolder should initially be lazy");
+            subfolder.IsExpanded = true;
+            await Wait(() => subfolder.Children.Count > 0);
+            Assert(subfolder.Children[0].Content is FileTreeEntry { Name: "nested.py", Directory: false }, "Expanding subfolder did not load its Python file");
             await OpenDocumentAsync(Path.Combine(folder, "data.csv")); var csv = Active!;
             Assert(csv.IconKey == "table", "CSV tab did not use the table icon");
             await SaveDocumentToPathAsync(csv, Path.Combine(folder, "renamed.json"));
