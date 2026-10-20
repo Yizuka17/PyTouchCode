@@ -17,6 +17,7 @@ public sealed partial class MainWindow
         if (Root.RequestedTheme != theme) Root.RequestedTheme = theme;
         SetUiFont(Root, new FontFamily(settings.UiFont), settings.UiFontSize, settings.UiFontWeight);
         ApplyMenuFonts();
+        foreach (var item in SidebarNavigation.MenuItems.OfType<NavigationViewItem>()) SetUiFont(item, new FontFamily(settings.UiFont), settings.UiFontSize, settings.UiFontWeight);
         if (settings.UseSystemAccent) FileSelectionIndicator.ClearValue(Border.BackgroundProperty);
         else FileSelectionIndicator.Background = new SolidColorBrush(ParseColor(settings.Accent));
         try

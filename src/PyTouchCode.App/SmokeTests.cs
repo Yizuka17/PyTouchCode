@@ -431,6 +431,8 @@ public sealed partial class MainWindow
             settings.UseSystemAccent = false; settings.Accent = "#B73153"; ApplyAppearance();
             settings.Workspace = directory; await RefreshFilesAsync();
             var root = FileTree.RootNodes[0]; FileTree.SelectedNode = root;
+            await Task.Delay(150); await Snapshot(Sidebar, "navigation-sidebar-debug.png");
+            Assert(FilesSidebarPanel.Visibility == Visibility.Visible && FileTreeHost.ActualHeight > 30, $"Sidebar content is hidden or empty: files={FilesSidebarPanel.Visibility}, debug={DebugSidebarPanel.Visibility}, host={FileTreeHost.ActualWidth}x{FileTreeHost.ActualHeight}, nav={SidebarNavigation.ActualWidth}x{SidebarNavigation.ActualHeight}, selected={((SidebarNavigation.SelectedItem as NavigationViewItem)?.Tag)}");
             await Wait(() => FileSelectionIndicator.Opacity == 1 && indicatorY.HasValue); await Task.Delay(650);
             float first = indicatorY!.Value; int baseline = await AccentSpan();
             FileTree.SelectedNode = root.Children[Math.Min(3, root.Children.Count - 1)];
@@ -443,6 +445,44 @@ public sealed partial class MainWindow
             if (animations) Assert(stretched > baseline + 3 && settled <= baseline + 2, $"Indicator did not stretch and contract: start={baseline}, moving={stretched}, end={settled}");
             Assert(FileSelectionIndicator.Width == 3 && FileSelectionIndicator.Height == 16, "Selection indicator dimensions are incorrect");
             settings.UseSystemAccent = previous; settings.Accent = accent; ApplyAppearance();
+        });
+        await Test("native navigation switches sidebar and settings without losing staged values", async () =>
+        {
+            SidebarNavigation.SelectedItem = SidebarNavigation.MenuItems[1];
+            await Wait(() => DebugSidebarPanel.Visibility == Visibility.Visible && FilesSidebarPanel.Visibility == Visibility.Collapsed);
+            SidebarNavigation.SelectedItem = SidebarNavigation.MenuItems[0];
+            await Wait(() => FilesSidebarPanel.Visibility == Visibility.Visible && DebugSidebarPanel.Visibility == Visibility.Collapsed);
+            await Task.Delay(650);
+            var refresh = RefreshFilesButton.TransformToVisual(Sidebar).TransformPoint(new Windows.Foundation.Point());
+            Assert(refresh.X + RefreshFilesButton.ActualWidth <= Sidebar.ActualWidth + 1, $"Navigation content clipped the refresh button: x={refresh.X}, w={RefreshFilesButton.ActualWidth}, sidebar={Sidebar.ActualWidth}, nav={SidebarNavigation.ActualWidth}, page={SidebarPages.ActualWidth}");
+            Assert(InterpreterButton.TransformToVisual(StatusBar).TransformPoint(new Windows.Foundation.Point()).X < 24, "Interpreter selector is not at the left of the status bar");
+            IEnumerable<T> Elements<T>(DependencyObject root) where T : DependencyObject
+            {
+                if (root is T value) yield return value;
+                for (int n = 0; n < VisualTreeHelper.GetChildrenCount(root); n++)
+                    foreach (var child in Elements<T>(VisualTreeHelper.GetChild(root, n))) yield return child;
+            }
+            string originalTheme = settings.Theme;
+            var opening = SettingsDialogAsync(); ContentDialog? dialog = null;
+            await Wait(() => { dialog = VisualTreeHelper.GetOpenPopupsForXamlRoot(Root.XamlRoot).Where(p => p.Child is not null).SelectMany(p => Elements<ContentDialog>(p.Child)).FirstOrDefault(); return dialog is not null; });
+            try
+            {
+                await Wait(() => Elements<NavigationView>(dialog!).Any());
+                var navigation = Elements<NavigationView>(dialog!).First();
+                Assert(navigation.MenuItems.Count == 4, "Settings navigation categories are incomplete");
+                await Wait(() => Elements<ComboBox>(dialog!).Any(c => c.Header as string == "应用主题"));
+                var theme = Elements<ComboBox>(dialog!).First(c => c.Header as string == "应用主题"); theme.SelectedItem = "Dark";
+                foreach (var item in navigation.MenuItems.Cast<NavigationViewItem>().Skip(1))
+                {
+                    navigation.SelectedItem = item; await Wait(() => ReferenceEquals(((ContentControl)navigation.Tag).Content, item.Tag));
+                }
+                navigation.SelectedItem = navigation.MenuItems[0];
+                await Wait(() => ReferenceEquals(((ContentControl)navigation.Tag).Content, ((NavigationViewItem)navigation.MenuItems[0]).Tag));
+                Assert(theme.SelectedItem as string == "Dark", "Navigation discarded staged settings");
+                await Task.Delay(650); await Snapshot(dialog!, "native-settings-navigation.png");
+            }
+            finally { dialog!.Hide(); await opening; }
+            Assert(settings.Theme == originalTheme, "Cancel saved staged settings");
         });
         await Test("lazy file tree", async () =>
         {

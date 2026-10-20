@@ -1,17 +1,15 @@
 # 验收记录
 
-版本 0.1.5，MSIX 0.1.5.0。验证日期 2026-10-20，Windows 10 19045 x64，200% 缩放。
+版本 0.1.5.1。验证日期 2026-10-20，Windows 10 19045 x64，200% 缩放。
 
 | 项目 | 结果 | 记录 |
 | --- | --- | --- |
-| Release x64 构建 | 0 warning，0 error | `artifacts/revision-015-package-release.log` |
-| 核心测试 | 27 项通过 | `artifacts/revision-015-core.log` |
-| 便携版应用测试 | 31 项通过 | `artifacts/revision-015-ui-release.log` |
-| MSIX 升级及开始菜单激活 | 31 项通过 | `artifacts/revision-015-msix.log` |
-| 选中动画 | 实际渲染的中间帧拉长，结束帧恢复 | `artifacts/msix-verified-*/selection-animation.json` |
+| Release x64 构建 | 0 warning，0 error | `artifacts/revision-0151-package-final.log` |
+| 便携版应用测试 | 32 项通过 | `artifacts/revision-0151-ui.log` |
+| MSIX 升级及开始菜单激活 | 32 项通过 | `artifacts/revision-0151-msix.log` |
 
-新增回归覆盖缺失 Python DLL 的候选环境、内置缓存修复、默认内置解释器及明确选择的记忆策略、退出时并发读取进程状态、终端输入、语言请求取消与重启、串口枚举和设备配置保存。打开解释器面板只列出内置环境，扫描通过用户操作启动。
+新增检查左下角解释器位置、文件／调试的原生 NavigationView 切换、窄侧栏下刷新按钮边界，以及设置分类切换时保留暂存值、取消不保存。文件树长名称使用省略号。保留文件树动画中间帧及现有编辑、配色、字体、Python、终端和解释器验证。
 
-界面测试检查 MicroPython / Pyboard 与串口入口、取消选择不改变当前环境，以及文件树指示条的主题色和伸缩动画。安装版的动画色块高度从 31 像素经过中间帧 55 像素，再恢复为 31 像素；原始帧保存在测试目录。
+实际渲染图包括 `native-settings-navigation.png` 和 `navigation-sidebar-debug.png`，保存在 `artifacts/msix-verified-*/`。本次未修改核心业务逻辑，27 项核心测试结果见 0.1.5 验收记录。
 
-保留原有的文件操作、字体、配色、图标、编辑、补全、debugpy、Python 输入、Shell 和 REPL 验证。Pyboard 硬件连接、Surface 物理触摸和干净 Windows 11 仍待实机验证。
+Pyboard 硬件连接、Surface 物理触摸和干净 Windows 11 仍待实机验证。

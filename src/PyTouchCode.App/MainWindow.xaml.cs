@@ -231,7 +231,7 @@ public sealed partial class MainWindow : Window
         if (debug)
         {
             debugger = new DebugAdapter(); debugger.Event += DebugEvent;
-            ShowSidebar(true); SidebarPivot.SelectedIndex = 1; DebugState.Text = "正在连接 debugpy…";
+            ShowSidebar(true); SidebarNavigation.SelectedItem = SidebarNavigation.MenuItems[1]; DebugState.Text = "正在连接 debugpy…";
             try { await debugger.StartAsync(python, file, BreakpointLines(tab), Path.GetDirectoryName(file)!, PythonProcessEnvironment.Create(python, settings.Environment)); }
             catch { await debugger.DisposeAsync(); debugger = null; throw; }
         }

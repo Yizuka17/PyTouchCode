@@ -38,8 +38,8 @@ public sealed partial class MainWindow
         Add(appearance, theme, material, systemAccent, accent, uiFont, uiSize, uiWeight, FontPreview(uiFont, uiSize, uiWeight, editorPalette));
         Add(editor, editorFont, editorSize, editorWeight, editorHeight, FontPreview(editorFont, editorSize, editorWeight, editorPalette, editorHeight), indent, tabs, wrap, complete, ghost);
         Add(terminal, terminalFont, terminalSize, terminalWeight, terminalHeight, FontPreview(terminalFont, terminalSize, terminalWeight, terminalPalette, terminalHeight), shellPath, profile, shellArgs, env);
-        var pivot = new Pivot(); pivot.Items.Add(new PivotItem { Header = "外观", Content = Scroll(appearance) }); pivot.Items.Add(new PivotItem { Header = "配色方案", Content = Scroll(schemes.View) }); pivot.Items.Add(new PivotItem { Header = "编辑器", Content = Scroll(editor) }); pivot.Items.Add(new PivotItem { Header = "终端", Content = Scroll(terminal) });
-        var error = new TextBlock { TextWrapping = TextWrapping.Wrap }; var panel = Form(); Add(panel, pivot, error);
+        var navigation = NavigationTabs(("外观", Scroll(appearance)), ("配色方案", Scroll(schemes.View)), ("编辑器", Scroll(editor)), ("终端", Scroll(terminal)));
+        var error = new TextBlock { TextWrapping = TextWrapping.Wrap }; var panel = Form(); Add(panel, navigation, error);
         var dialog = new ContentDialog { Title = "设置", Content = panel, PrimaryButtonText = "保存设置", CloseButtonText = "取消", DefaultButton = ContentDialogButton.Primary };
         dialog.Resources["ContentDialogMaxWidth"] = 680d;
         AppSettings? accepted = null;
