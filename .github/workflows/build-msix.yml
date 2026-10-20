@@ -97,7 +97,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: PyTouchCode-0.1.5.0-x64-msix-and-portable
+          name: PyTouchCode-0.1.5.1-x64-msix-and-portable
           retention-days: 14
           if-no-files-found: error
           compression-level: 0
