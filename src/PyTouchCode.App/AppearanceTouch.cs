@@ -20,22 +20,26 @@ public sealed partial class MainWindow
         foreach (var item in SidebarNavigation.MenuItems.OfType<NavigationViewItem>()) SetUiFont(item, new FontFamily(settings.UiFont), settings.UiFontSize, settings.UiFontWeight);
         if (settings.UseSystemAccent) FileSelectionIndicator.ClearValue(Border.BackgroundProperty);
         else FileSelectionIndicator.Background = new SolidColorBrush(ParseColor(settings.Accent));
+        ApplyWindowMaterial(settings.Material, settings.MaterialTransparency);
+        if (!settings.UseSystemAccent) { var color = ParseColor(settings.Accent); RunButton.Background = new SolidColorBrush(color); }
+        else RunButton.ClearValue(Control.BackgroundProperty);
+        foreach (var tab in documents) { ConfigureEditor(tab.Control, false); UpdateTab(tab); }
+        foreach (var console in consoles) if (console is not null) ConfigureEditor(console, true);
+    }
+    void ApplyWindowMaterial(string material, double transparency)
+    {
         try
         {
-            SystemBackdrop = settings.Material switch
+            if (SystemBackdrop is AdjustableBackdrop existing && existing.Material == material) existing.Transparency = transparency;
+            else SystemBackdrop = material switch
             {
-                "Mica" when Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported() => new MicaBackdrop(),
-                "MicaAlt" when Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported() => new MicaBackdrop { Kind = Microsoft.UI.Composition.SystemBackdrops.MicaKind.BaseAlt },
-                "Acrylic" when Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported() => new DesktopAcrylicBackdrop(),
+                "Mica" or "MicaAlt" when Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported() => new AdjustableBackdrop(material, transparency),
+                "Acrylic" when Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported() => new AdjustableBackdrop(material, transparency),
                 _ => null
             };
         }
         catch (System.Runtime.InteropServices.COMException) { SystemBackdrop = null; }
         Root.Background = SystemBackdrop is null ? (Brush)Application.Current.Resources["ApplicationPageBackgroundThemeBrush"] : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        if (!settings.UseSystemAccent) { var color = ParseColor(settings.Accent); RunButton.Background = new SolidColorBrush(color); }
-        else RunButton.ClearValue(Control.BackgroundProperty);
-        foreach (var tab in documents) { ConfigureEditor(tab.Control, false); UpdateTab(tab); }
-        foreach (var console in consoles) if (console is not null) ConfigureEditor(console, true);
     }
     void ApplyMenuFonts()
     {
@@ -50,8 +54,23 @@ public sealed partial class MainWindow
         foreach (var menu in MainMenu.Items)
         {
             SetUiFont(menu, new FontFamily(settings.UiFont), settings.UiFontSize, settings.UiFontWeight);
+            ApplyMenuHeaderFont(menu);
             Visit(menu.Items);
         }
+    }
+    static Button? MenuHeaderButton(DependencyObject element)
+    {
+        if (element is Button { Name: "ContentButton" } button) return button;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++)
+            if (MenuHeaderButton(VisualTreeHelper.GetChild(element, i)) is { } found) return found;
+        return null;
+    }
+    void ApplyMenuHeaderFont(MenuBarItem menu)
+    {
+        // WinUI's MenuBarItem template does not bind its internal button's font.
+        menu.ApplyTemplate();
+        if (MenuHeaderButton(menu) is { } header)
+            SetUiFont(header, new FontFamily(settings.UiFont), settings.UiFontSize, settings.UiFontWeight);
     }
     static void SetUiFont(DependencyObject element, FontFamily font, double? size = null, int? weight = null)
     {

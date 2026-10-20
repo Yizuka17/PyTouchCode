@@ -93,6 +93,49 @@ public sealed partial class MainWindow
             }
             finally { Root.Children.Remove(button); }
         });
+        await Test("visible menu headers follow UI typography after font and theme switches", async () =>
+        {
+            string original = JsonSerializer.Serialize(settings);
+            try
+            {
+                foreach (string family in new[] { "Consolas", "Microsoft YaHei", "Segoe UI" })
+                {
+                    settings.UiFont = family; settings.UiFontSize = 19; settings.UiFontWeight = 700;
+                    settings.Theme = family == "Microsoft YaHei" ? "Light" : "Dark"; ApplyAppearance();
+                    await Task.Delay(100);
+                    foreach (var menu in MainMenu.Items)
+                    {
+                        var button = MenuHeaderButton(menu);
+                        Assert(button is { IsLoaded: true } && button.FontFamily.Source == family && button.FontSize == 19 && button.FontWeight.Weight == 700, "Visible menu header ignored typography: " + menu.Title);
+                    }
+                    CommandRow.Background = new SolidColorBrush(ParseColor(Root.ActualTheme == ElementTheme.Dark ? "#202020" : "#F3F3F3"));
+                    await Snapshot(CommandRow, "menu-font-" + family.Replace(' ', '-') + ".png");
+                    CommandRow.ClearValue(Microsoft.UI.Xaml.Controls.Panel.BackgroundProperty);
+                }
+            }
+            finally { CommandRow.ClearValue(Microsoft.UI.Xaml.Controls.Panel.BackgroundProperty); settings = JsonSerializer.Deserialize<AppSettings>(original)!; ApplyAppearance(); }
+        });
+        await Test("native material transparency changes the backdrop without fading content", async () =>
+        {
+            string original = JsonSerializer.Serialize(settings);
+            try
+            {
+                foreach (string material in new[] { "Acrylic", "Mica", "MicaAlt", "Solid" })
+                {
+                    bool supported = material == "Acrylic" ? Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported() : material != "Solid" && Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported();
+                    settings.Material = material; settings.MaterialTransparency = .2; ApplyAppearance();
+                    if (!supported) { Assert(SystemBackdrop is null, "Unsupported material has no solid fallback"); continue; }
+                    await Wait(() => (SystemBackdrop as AdjustableBackdrop)?.TintOpacity.HasValue == true);
+                    var backdrop = (AdjustableBackdrop)SystemBackdrop!;
+                    Assert(Math.Abs(backdrop.TintOpacity!.Value - .8) < .001, "Material tint ignored transparency");
+                    ApplyWindowMaterial(material, .85);
+                    Assert(ReferenceEquals(backdrop, SystemBackdrop) && Math.Abs(backdrop.TintOpacity!.Value - .15) < .001, "Slider did not update the connected controller");
+                    settings.Theme = "Light"; ApplyAppearance(); settings.Theme = "Dark"; ApplyAppearance();
+                    Assert(Root.Opacity == 1 && MainMenu.Opacity == 1 && tab.Control.Opacity == 1, "Transparency faded window content");
+                }
+            }
+            finally { settings = JsonSerializer.Deserialize<AppSettings>(original)!; ApplyAppearance(); }
+        });
         await Test("native layout bounds", () =>
         {
             Assert(Tabs.ActualWidth > 500 && EditorWorkspace.ActualHeight > 300, "Workspace did not arrange");
@@ -462,7 +505,7 @@ public sealed partial class MainWindow
                 for (int n = 0; n < VisualTreeHelper.GetChildrenCount(root); n++)
                     foreach (var child in Elements<T>(VisualTreeHelper.GetChild(root, n))) yield return child;
             }
-            string originalTheme = settings.Theme;
+            string originalTheme = settings.Theme; double originalTransparency = settings.MaterialTransparency;
             var opening = SettingsDialogAsync(); ContentDialog? dialog = null;
             await Wait(() => { dialog = VisualTreeHelper.GetOpenPopupsForXamlRoot(Root.XamlRoot).Where(p => p.Child is not null).SelectMany(p => Elements<ContentDialog>(p.Child)).FirstOrDefault(); return dialog is not null; });
             try
@@ -470,6 +513,9 @@ public sealed partial class MainWindow
                 await Wait(() => Elements<NavigationView>(dialog!).Any());
                 var navigation = Elements<NavigationView>(dialog!).First();
                 Assert(navigation.MenuItems.Count == 4, "Settings navigation categories are incomplete");
+                var transparency = Elements<Slider>(dialog!).First(s => s.Name == "MaterialTransparency");
+                transparency.Value = 83;
+                Assert(settings.MaterialTransparency == originalTransparency, "Preview prematurely saved transparency");
                 await Wait(() => Elements<ComboBox>(dialog!).Any(c => c.Header as string == "应用主题"));
                 var theme = Elements<ComboBox>(dialog!).First(c => c.Header as string == "应用主题"); theme.SelectedItem = "Dark";
                 foreach (var item in navigation.MenuItems.Cast<NavigationViewItem>().Skip(1))
@@ -483,6 +529,7 @@ public sealed partial class MainWindow
             }
             finally { dialog!.Hide(); await opening; }
             Assert(settings.Theme == originalTheme, "Cancel saved staged settings");
+            Assert(settings.MaterialTransparency == originalTransparency && (SystemBackdrop is not AdjustableBackdrop backdrop || backdrop.Transparency == originalTransparency), "Cancel did not restore material transparency");
         });
         await Test("lazy file tree", async () =>
         {

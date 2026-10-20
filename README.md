@@ -2,12 +2,13 @@
 
 原生 Windows Python IDE，基于 WinUI 3 和 Scintilla。
 
-[下载 v0.1.5.1](https://github.com/Yizuka17/PyTouchCode/releases/tag/v0.1.5.1)
+[下载 v0.1.5.2](https://github.com/Yizuka17/PyTouchCode/releases/tag/v0.1.5.2)
 
 - 默认使用内置 Python 3.13.16，包含 pip、Jedi、debugpy、mpremote、Ruff 和 Tcl/Tk。
 - 其他 Python 环境和串口由用户手动扫描，解释器选择支持 MicroPython / Pyboard。
 - 16 套配色，编辑器与终端分别设置深浅方案，支持自定义颜色。
 - 界面、编辑器、终端分别选择本机字体、字号和字重；编辑器和终端支持行高设置。
+- Mica、Mica Alt 和 Acrylic 材质支持透明度调节及预览。
 - 文件树和标签页按类型显示图标，支持右键或长按新建、重命名文件和文件夹；选中项使用 WinUI 导航伸缩动画。
 - 侧栏和设置分类使用原生 NavigationView，解释器入口位于左下角。
 - 多标签编辑、补全、运行、调试、终端输入和 MicroPython 设备操作。
@@ -32,7 +33,7 @@ MSIX 为开发证书签名。将 MSIX、`PyTouchCode-Development.cer` 和 `Insta
 ```powershell
 dotnet run --project tests/PyTouchCode.Tests -c Release -- ./runtime/python/python.exe
 ./scripts/Test-UI.ps1
-./scripts/Test-MSIX.ps1 -Package ./artifacts/PyTouchCode_0.1.5.1_x64.msix
+./scripts/Test-MSIX.ps1 -Package ./artifacts/PyTouchCode_0.1.5.2_x64.msix
 ```
 
 [验收记录](docs/ACCEPTANCE.md) | [第三方许可](THIRD_PARTY_NOTICES.md)

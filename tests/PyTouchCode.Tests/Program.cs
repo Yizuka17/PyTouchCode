@@ -98,6 +98,18 @@ await Test("Independent palettes, font weights and custom colors round trip", as
     custom.Background = "#GG0000"; await Throws<InvalidDataException>(() => store.SaveAsync(settings));
     custom.Background = "#123456"; custom.Name = ColorSchemes.BuiltIn[0].Name; await Throws<InvalidDataException>(() => store.SaveAsync(settings));
 });
+await Test("Material transparency persists and validates downloaded settings", async () =>
+{
+    var store = new SettingsStore(Path.Combine(temporary, "material"));
+    var settings = new AppSettings { Material = "Acrylic", MaterialTransparency = .73 };
+    await store.SaveAsync(settings); var loaded = await store.LoadAsync();
+    Assert(loaded.Material == "Acrylic" && loaded.MaterialTransparency == .73, "Material transparency was lost");
+    settings.MaterialTransparency = -1; settings.Validate(); Assert(settings.MaterialTransparency == 0, "Negative transparency was not clamped");
+    settings.MaterialTransparency = 2; settings.Validate(); Assert(settings.MaterialTransparency == 1, "Transparency above 100% was not clamped");
+    settings.MaterialTransparency = double.NaN;
+    await Throws<InvalidDataException>(() => { settings.Validate(); return Task.CompletedTask; });
+    Assert(JsonSerializer.Deserialize<AppSettings>("{}")!.MaterialTransparency == .5, "Older settings have no material default");
+});
 await Test("File icon detection is case-insensitive and has folder and unknown fallbacks", () =>
 {
     Assert(FileIcons.Resolve("C:/project/MAIN.PY") == "python" && FileIcons.Resolve("data.CSV") == "table" && FileIcons.Resolve("data.cvs") == "table", "Python or tabular file detection failed");

@@ -1,5 +1,5 @@
 <Window x:Class="PyTouchCode.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:PyTouchCode.App">
- <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+ <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" KeyboardAcceleratorPlacementMode="Hidden">
   <Grid.RowDefinitions><RowDefinition Height="40"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="30"/></Grid.RowDefinitions>
   <Grid x:Name="TitleBar" Padding="16,0,150,0" ColumnSpacing="12">
    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

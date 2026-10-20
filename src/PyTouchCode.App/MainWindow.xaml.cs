@@ -41,6 +41,7 @@ public sealed partial class MainWindow : Window
         App.StartupPhase = "Menu icons";
         try { AddMenuIcons(); }
         catch (Exception e) { throw new InvalidOperationException("加载菜单图标失败。", e); }
+        foreach (var menu in MainMenu.Items) menu.Loaded += (_, _) => ApplyMenuHeaderFont(menu);
         App.StartupPhase = "Title bar"; ExtendsContentIntoTitleBar = true; SetTitleBar(TitleBar);
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1280, 860));
         for (int i = 0; i < consoles.Length; i++)
