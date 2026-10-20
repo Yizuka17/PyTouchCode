@@ -69,42 +69,89 @@ public sealed partial class MainWindow
     }
     async Task EnvironmentDialogAsync(bool firstRun = false)
     {
-        var panel = Form(); var path = Field("python.exe 路径", settings.Interpreter); var environments = new ComboBox { Header = "检测到的环境", HorizontalAlignment = HorizontalAlignment.Stretch };
-        var status = new TextBlock { TextWrapping = TextWrapping.Wrap }; var scan = new Button { Content = "扫描 Python / Conda / venv" }; var browse = new Button { Content = "浏览 python.exe…" };
-        Add(panel, environments, path, browse, scan, status);
+        using var lifetime = new CancellationTokenSource();
+        var target = Choice("解释器", ["Python", "MicroPython / Pyboard"], settings.ExecutionTarget == "MicroPython" ? "MicroPython / Pyboard" : "Python");
+        var panel = Form(); var pythonPanel = Form(); var boardPanel = Form();
+        var path = Field("python.exe 路径", settings.Interpreter);
+        var environments = new ComboBox { Header = "Python 环境", HorizontalAlignment = HorizontalAlignment.Stretch };
+        var status = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var scan = new Button { Content = "扫描 Python / Conda / venv" }; var browse = new Button { Content = "浏览 python.exe…" };
+        var ports = new ComboBox { Header = "USB 串口", IsEditable = true, Text = settings.DevicePort, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var scanPorts = new Button { Content = "扫描串口" };
+        Add(pythonPanel, environments, path, browse, scan); Add(boardPanel, ports, scanPorts); Add(panel, target, pythonPanel, boardPanel, status);
+        bool IsBoard() => target.SelectedIndex == 1;
+        var dialog = new ContentDialog { Title = firstRun ? "开始使用 PyTouchCode" : "解释器", Content = Scroll(panel), PrimaryButtonText = "使用此环境", CloseButtonText = firstRun ? "稍后配置" : "取消" };
         environments.SelectionChanged += (_, _) => { if (environments.SelectedItem is PythonEnvironment value) path.Text = value.Executable; };
         async Task Scan()
         {
-            scan.IsEnabled = false; status.Text = "正在扫描…";
+            bool board = IsBoard(); scan.IsEnabled = scanPorts.IsEnabled = target.IsEnabled = false; status.Text = "正在扫描…";
             try
             {
-                var found = await PythonEnvironments.DiscoverAsync(settings.Workspace, settings.Interpreter, bundled);
-                environments.Items.Clear(); foreach (var value in found) environments.Items.Add(value);
-                environments.SelectedItem = found.FirstOrDefault(x => x.Executable == path.Text) ?? found.FirstOrDefault();
-                status.Text = found.Count == 0 ? "未找到环境。可手动指定 python.exe，或通过环境更新下载内置 Python。" : $"发现 {found.Count} 个环境";
+                if (board)
+                {
+                    var found = await SerialDevices.DiscoverAsync(DevicePython, lifetime.Token);
+                    string previous = (ports.SelectedItem as SerialDevice)?.Port ?? ports.Text;
+                    ports.Items.Clear(); foreach (var value in found) ports.Items.Add(value);
+                    ports.SelectedItem = found.FirstOrDefault(x => string.Equals(x.Port, previous, StringComparison.OrdinalIgnoreCase)) ?? found.FirstOrDefault();
+                    if (ports.SelectedItem is null) ports.Text = previous;
+                    status.Text = found.Count == 0 ? "未发现串口，可连接设备后重试。" : $"发现 {found.Count} 个串口";
+                }
+                else
+                {
+                    var found = await PythonEnvironments.DiscoverAsync(settings.Workspace, path.Text, bundled, lifetime.Token);
+                    string previous = path.Text; environments.Items.Clear(); foreach (var value in found) environments.Items.Add(value);
+                    environments.SelectedItem = found.FirstOrDefault(x => string.Equals(x.Executable, previous, StringComparison.OrdinalIgnoreCase));
+                    if (environments.SelectedItem is null && string.IsNullOrWhiteSpace(previous)) environments.SelectedItem = found.FirstOrDefault();
+                    status.Text = found.Count == 0 ? "未找到可用环境，可手动指定 python.exe。" : $"发现 {found.Count} 个可用环境";
+                }
             }
-            finally { scan.IsEnabled = true; }
+            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "扫描超时，请重试。"; }
+            catch (Exception e) { status.Text = e.Message; }
+            finally { scan.IsEnabled = scanPorts.IsEnabled = target.IsEnabled = true; }
         }
-        scan.Click += async (_, _) => await SafeAsync(Scan);
+        void UpdateTarget()
+        {
+            pythonPanel.Visibility = IsBoard() ? Visibility.Collapsed : Visibility.Visible;
+            boardPanel.Visibility = IsBoard() ? Visibility.Visible : Visibility.Collapsed;
+            dialog.PrimaryButtonText = IsBoard() ? "使用此设备" : "使用此环境"; status.Text = "";
+        }
+        target.SelectionChanged += (_, _) => UpdateTarget();
+        scan.Click += async (_, _) => await Scan(); scanPorts.Click += async (_, _) => await Scan();
         browse.Click += async (_, _) => await SafeAsync(async () =>
         {
             var picker = new FileOpenPicker(); WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this)); picker.FileTypeFilter.Add(".exe");
             var file = await picker.PickSingleFileAsync(); if (file is not null) path.Text = file.Path;
         });
-        var dialog = new ContentDialog { Title = firstRun ? "开始使用 PyTouchCode" : "Python 环境", Content = Scroll(panel), PrimaryButtonText = "使用此环境", CloseButtonText = firstRun ? "稍后配置" : "取消" };
         dialog.PrimaryButtonClick += async (_, args) =>
         {
             var deferral = args.GetDeferral();
             try
             {
-                var selected = await PythonEnvironments.ProbeAsync(path.Text.Trim());
-                if (selected is null) { args.Cancel = true; status.Text = "解释器检测失败，请选择可运行的 python.exe。"; }
-                else { settings.Interpreter = selected.Executable; settings.Initialized = true; language.Stop(); }
+                if (IsBoard())
+                {
+                    settings.DevicePort = SerialDevices.ValidatePort((ports.SelectedItem as SerialDevice)?.Port ?? ports.Text);
+                    settings.ExecutionTarget = "MicroPython"; selectedPort = settings.DevicePort;
+                }
+                else
+                {
+                    var selected = await PythonEnvironments.ProbeAsync(path.Text.Trim(), lifetime.Token);
+                    if (selected is null) { args.Cancel = true; status.Text = "解释器不可用，请选择其他环境。"; return; }
+                    settings.Interpreter = selected.Executable; settings.InterpreterSelectedByUser = true; settings.ExecutionTarget = "Python";
+                }
+                settings.Initialized = true; language.Stop();
             }
             catch (Exception e) { args.Cancel = true; status.Text = e.Message; }
             finally { deferral.Complete(); }
         };
-        dialog.Opened += async (_, _) => await SafeAsync(Scan);
+        if (File.Exists(bundled))
+        {
+            using var info = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(RuntimeUpdates.BundledDirectory, "pytouchcode-runtime.json")));
+            var value = new PythonEnvironment(bundled!, info.RootElement.GetProperty("version").GetString()!, Path.GetDirectoryName(bundled!)!, "内置");
+            environments.Items.Add(value);
+            if (string.Equals(path.Text, bundled, StringComparison.OrdinalIgnoreCase)) environments.SelectedItem = value;
+        }
+        UpdateTarget();
+        dialog.Closed += (_, _) => lifetime.Cancel();
         await ShowDialogAsync(dialog); settings.Initialized = true; UpdateInterpreter(); await store.SaveAsync(settings);
     }
     async Task UpdatesDialogAsync()
@@ -150,7 +197,7 @@ public sealed partial class MainWindow
             if (runner.IsRunning || repl.IsRunning || debugger?.IsRunning == true) throw new InvalidOperationException("请先停止 Python。");
             string executable = await new RuntimeUpdates(store.DirectoryPath).DownloadPythonAsync(latest, new Progress<string>(value => status.Text = value), lifetime.Token);
             if (await PythonEnvironments.ProbeAsync(executable, lifetime.Token) is null) throw new IOException("新环境验证失败，保留原解释器。");
-            await Install(executable, RuntimeUpdates.ToolPackages); settings.Interpreter = executable; await store.SaveAsync(settings); UpdateInterpreter(); status.Text = "已切换到 Python " + latest;
+            await Install(executable, RuntimeUpdates.ToolPackages); settings.Interpreter = executable; settings.InterpreterSelectedByUser = true; await store.SaveAsync(settings); UpdateInterpreter(); status.Text = "已切换到 Python " + latest;
         });
         tools.Click += async (_, _) => await Work(() => Install(settings.Interpreter, RuntimeUpdates.ToolPackages));
         ml.Click += async (_, _) => await Work(() => Install(settings.Interpreter, ["numpy", "pandas", "matplotlib", "scikit-learn"]));

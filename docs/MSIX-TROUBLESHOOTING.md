@@ -6,7 +6,7 @@
 
 ```powershell
 ./scripts/Package.ps1
-./scripts/Test-MSIX.ps1 -Package ./artifacts/PyTouchCode_0.1.4.1_x64.msix
+./scripts/Test-MSIX.ps1 -Package ./artifacts/PyTouchCode_0.1.5.0_x64.msix
 ./scripts/Test-UI.ps1
 ```
 

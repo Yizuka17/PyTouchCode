@@ -370,6 +370,80 @@ public sealed partial class MainWindow
             ReplaceTerminalDraft(2, "exit()"); await SubmitTerminalAsync(2); await Wait(() => !repl.IsRunning); FlushOutput();
             foreach (int channel in new[] { 0, 1, 2 }) await File.WriteAllTextAsync(Path.Combine(directory, $"terminal-{channel}.txt"), consoles[channel].Editor.GetText(consoles[channel].Editor.Length + 1));
         });
+        await Test("incomplete bundled cache is repaired without replacing the original", async () =>
+        {
+            string data = Path.Combine(directory, "runtime-repair");
+            using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(RuntimeUpdates.BundledDirectory, "pytouchcode-runtime.json")));
+            string version = manifest.RootElement.GetProperty("version").GetString()!;
+            string broken = Path.Combine(data, "runtimes", version + "-r" + manifest.RootElement.GetProperty("revision").GetInt32());
+            Directory.CreateDirectory(broken);
+            File.Copy(Path.Combine(RuntimeUpdates.BundledDirectory, "pytouchcode-runtime.json"), Path.Combine(broken, "pytouchcode-runtime.json"));
+            File.Copy(Path.Combine(RuntimeUpdates.BundledDirectory, "python.exe"), Path.Combine(broken, "python.exe"));
+            string repaired = (await new RuntimeUpdates(data).EnsureBundledAsync())!;
+            Assert(Path.GetDirectoryName(repaired) != broken && File.Exists(Path.Combine(broken, "python.exe")), "Repair replaced the incomplete cache in place");
+            Assert(await PythonEnvironments.ProbeAsync(repaired) is not null, "Repaired Python cannot start");
+        });
+        await Test("interpreter selector includes MicroPython and serial scan and cancels cleanly", async () =>
+        {
+            IEnumerable<T> Elements<T>(DependencyObject root) where T : DependencyObject
+            {
+                if (root is T value) yield return value;
+                for (int n = 0; n < VisualTreeHelper.GetChildrenCount(root); n++)
+                    foreach (var child in Elements<T>(VisualTreeHelper.GetChild(root, n))) yield return child;
+            }
+            string oldTarget = settings.ExecutionTarget, oldPort = settings.DevicePort;
+            var opening = EnvironmentDialogAsync();
+            ContentDialog? dialog = null;
+            await Wait(() => { dialog = VisualTreeHelper.GetOpenPopupsForXamlRoot(Root.XamlRoot).Where(p => p.Child is not null).SelectMany(p => Elements<ContentDialog>(p.Child)).FirstOrDefault(); return dialog is not null; });
+            try
+            {
+                await Wait(() => Elements<ComboBox>(dialog!).Any(c => c.Header as string == "解释器"));
+                var selector = Elements<ComboBox>(dialog!).First(c => c.Header as string == "解释器");
+                await Wait(() => selector.IsEnabled); selector.SelectedIndex = 1; await Wait(() => selector.IsEnabled);
+                Assert(Elements<ComboBox>(dialog!).Any(c => c.Header as string == "USB 串口"), "MicroPython has no port selector");
+                Assert(Elements<Button>(dialog!).Any(b => b.Content as string == "扫描串口"), "MicroPython has no scan action");
+                await Snapshot(dialog!, "interpreter-micropython.png");
+            }
+            finally { dialog!.Hide(); await opening; }
+            Assert(settings.ExecutionTarget == oldTarget && settings.DevicePort == oldPort, "Cancel changed the selected interpreter");
+            settings.ExecutionTarget = "MicroPython"; settings.DevicePort = "COM65535"; UpdateInterpreter();
+            Assert(ViewModel.InterpreterLabel.Contains("MicroPython") && ViewModel.InterpreterLabel.Contains("COM65535"), "Status bar did not show the board target");
+            settings.ExecutionTarget = oldTarget; settings.DevicePort = oldPort; UpdateInterpreter();
+        });
+        await Test("file selection renders stretch and contraction between native animation frames", async () =>
+        {
+            async Task<int> AccentSpan(string? filename = null)
+            {
+                var bitmap = new RenderTargetBitmap(); await bitmap.RenderAsync(Sidebar);
+                byte[] pixels = (await bitmap.GetPixelsAsync()).ToArray(); int min = int.MaxValue, max = -1;
+                for (int n = 0; n < pixels.Length; n += 4)
+                    if (pixels[n] == 0x53 && pixels[n + 1] == 0x31 && pixels[n + 2] == 0xB7 && pixels[n + 3] == 255)
+                    { int row = n / 4 / bitmap.PixelWidth; min = Math.Min(min, row); max = Math.Max(max, row); }
+                if (filename is not null)
+                {
+                    using var file = File.Create(Path.Combine(directory, filename)); using var stream = file.AsRandomAccessStream();
+                    var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+                    encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, 192, 192, pixels); await encoder.FlushAsync();
+                }
+                return max < 0 ? 0 : max - min + 1;
+            }
+            bool previous = settings.UseSystemAccent; string accent = settings.Accent;
+            settings.UseSystemAccent = false; settings.Accent = "#B73153"; ApplyAppearance();
+            settings.Workspace = directory; await RefreshFilesAsync();
+            var root = FileTree.RootNodes[0]; FileTree.SelectedNode = root;
+            await Wait(() => FileSelectionIndicator.Opacity == 1 && indicatorY.HasValue); await Task.Delay(650);
+            float first = indicatorY!.Value; int baseline = await AccentSpan();
+            FileTree.SelectedNode = root.Children[Math.Min(3, root.Children.Count - 1)];
+            await Wait(() => indicatorY.HasValue && indicatorY.Value != first); await Task.Delay(100);
+            int stretched = await AccentSpan("file-selection-moving.png");
+            await Task.Delay(650); int settled = await AccentSpan("file-selection.png");
+            bool animations = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled;
+            await File.WriteAllTextAsync(Path.Combine(directory, "selection-animation.json"), JsonSerializer.Serialize(new { animations, baseline, stretched, settled }));
+            Assert(baseline > 0 && settled > 0, "Selection indicator did not render");
+            if (animations) Assert(stretched > baseline + 3 && settled <= baseline + 2, $"Indicator did not stretch and contract: start={baseline}, moving={stretched}, end={settled}");
+            Assert(FileSelectionIndicator.Width == 3 && FileSelectionIndicator.Height == 16, "Selection indicator dimensions are incorrect");
+            settings.UseSystemAccent = previous; settings.Accent = accent; ApplyAppearance();
+        });
         await Test("lazy file tree", async () =>
         {
             settings.Workspace = directory; await RefreshFilesAsync(); Assert(FileTree.RootNodes.Count == 1 && FileTree.RootNodes[0].Children.Count > 0, "File tree did not load");

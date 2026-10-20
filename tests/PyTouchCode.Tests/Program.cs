@@ -110,10 +110,66 @@ await Test("PowerShell defaults never load user Profile", () =>
     Assert(command.Arguments.Contains("-NoProfile") && command.Arguments.Contains("-NoLogo"), "Unsafe shell defaults");
     Assert(!ShellCommand.Resolve(new AppSettings { Shell = "pwsh.exe", EnableShellProfile = true }).Arguments.Contains("-NoProfile"), "Explicit opt-in ignored"); return Task.CompletedTask;
 });
+await Test("Startup uses bundled Python until the user explicitly selects an interpreter", () =>
+{
+    string candidate = Path.Combine(temporary, "external-python.exe"); File.Copy(Path.GetFullPath(python), candidate);
+    var settings = new AppSettings { Interpreter = candidate };
+    PythonEnvironments.SelectStartup(settings, Path.GetFullPath(python));
+    Assert(settings.Interpreter == Path.GetFullPath(python) && !settings.InterpreterSelectedByUser, "Startup automatically selected an external interpreter");
+    settings.Interpreter = candidate; settings.InterpreterSelectedByUser = true;
+    PythonEnvironments.SelectStartup(settings, Path.GetFullPath(python));
+    Assert(settings.Interpreter == candidate, "Startup discarded an explicit user selection");
+    settings.Interpreter = Path.Combine(temporary, "missing-python.exe");
+    PythonEnvironments.SelectStartup(settings, Path.GetFullPath(python));
+    Assert(settings.Interpreter == Path.GetFullPath(python) && !settings.InterpreterSelectedByUser, "Missing selected interpreter did not fall back to bundled Python");
+    return Task.CompletedTask;
+});
 await Test("Interpreter probing", async () =>
 {
     var environment = await PythonEnvironments.ProbeAsync(python); Assert(environment is not null && environment.Version.StartsWith("3.13."), "Bundled Python not found");
     Assert(await PythonEnvironments.ProbeAsync(Path.Combine(temporary, "missing.exe")) is null, "Nonexistent executable accepted");
+});
+await Test("Broken interpreter with a missing Python DLL exits silently", async () =>
+{
+    string folder = Path.Combine(temporary, "broken-python"); Directory.CreateDirectory(folder);
+    string exe = Path.Combine(folder, "python.exe"); File.Copy(Path.GetFullPath(python), exe);
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    Assert(await PythonEnvironments.ProbeAsync(exe) is null, "Incomplete interpreter was accepted");
+    Assert(clock.Elapsed < TimeSpan.FromSeconds(4), "Broken interpreter blocked behind a Windows loader dialog");
+});
+await Test("Process exit, status polling and repeated input do not access disposed processes", async () =>
+{
+    await using var session = new ProcessSession();
+    for (int n = 0; n < 20; n++)
+    {
+        var run = session.RunAsync(python, ["-c", "input();print('done')"], temporary);
+        var monitor = Task.Run(async () => { while (!run.IsCompleted) { _ = session.IsRunning; await Task.Yield(); } });
+        while (!session.IsRunning && !run.IsCompleted) await Task.Yield();
+        await session.SendAsync("go");
+        await Task.WhenAll(run, monitor); Assert(!session.IsRunning, "Exited process was retained"); session.Stop();
+    }
+});
+await Test("Stopping an active language request cancels cleanly and allows restart", async () =>
+{
+    string slow = Path.Combine(temporary, "slow_bridge.py");
+    await File.WriteAllTextAsync(slow, "import sys,time,json\nfor line in sys.stdin:\n time.sleep(10)\n print('{}',flush=True)\n");
+    await using var service = new LanguageService();
+    var request = service.RequestAsync(python, slow, new { action = "complete" }, CancellationToken.None);
+    await Task.Delay(100); service.Stop();
+    await Throws<OperationCanceledException>(async () => await request);
+    var result = await service.RequestAsync(python, bridge, new { action = "diagnose", source = "x=1", line = 1, column = 0 }, CancellationToken.None);
+    Assert(result.TryGetProperty("diagnostics", out _), "Language worker did not restart");
+});
+await Test("Serial scanning and execution target settings", async () =>
+{
+    Assert(SerialDevices.ValidatePort("com17") == "COM17", "COM port was not normalized");
+    foreach (string invalid in new[] { "COM0", "COM1 anything", "../port" })
+        await Throws<InvalidDataException>(() => { SerialDevices.ValidatePort(invalid); return Task.CompletedTask; });
+    var ports = await SerialDevices.DiscoverAsync(python);
+    Assert(ports.All(p => p.Port.StartsWith("COM")), "Invalid serial scan results");
+    var store = new SettingsStore(Path.Combine(temporary, "device-settings"));
+    await store.SaveAsync(new AppSettings { ExecutionTarget = "MicroPython", DevicePort = "COM17" });
+    var loaded = await store.LoadAsync(); Assert(loaded.ExecutionTarget == "MicroPython" && loaded.DevicePort == "COM17", "Device target was lost");
 });
 await Test("Direct process IO including prompts and Unicode paths", async () =>
 {

@@ -213,6 +213,7 @@ public sealed class FileTreeEntry : INotifyPropertyChanged
     public string Path { get; }
     public bool Directory { get; }
     public string Name { get; }
+    public override string ToString() => Name;
     private ImageSource? iconSource;
     public ImageSource? IconSource
     {

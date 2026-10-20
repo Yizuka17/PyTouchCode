@@ -1,4 +1,4 @@
-param([string]$Executable = (Join-Path $PSScriptRoot '../artifacts/publish-0.1.4/PyTouchCode.exe'), [int]$Repeat = 3)
+param([string]$Executable = (Join-Path $PSScriptRoot '../artifacts/publish-0.1.5/PyTouchCode.exe'), [int]$Repeat = 3)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 for ($iteration = 1; $iteration -le $Repeat; $iteration++) {

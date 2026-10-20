@@ -8,6 +8,10 @@ public sealed class RuntimeUpdates(string dataDirectory)
     static readonly HttpClient Client = new(new HttpClientHandler { AutomaticDecompression = System.Net.DecompressionMethods.All }) { Timeout = TimeSpan.FromMinutes(5) };
     public static readonly string[] ToolPackages = ["jedi", "debugpy", "mpremote", "ruff"];
     public static string BundledDirectory => Path.Combine(AppContext.BaseDirectory, "runtime", "python");
+    static bool Complete(string directory, string version) =>
+        File.Exists(Path.Combine(directory, "pytouchcode-runtime.json")) && File.Exists(Path.Combine(directory, "python.exe")) &&
+        File.Exists(Path.Combine(directory, "python" + Version.Parse(version).Major + Version.Parse(version).Minor + ".dll")) &&
+        File.Exists(Path.Combine(directory, "Lib", "os.py"));
     public async Task<string?> EnsureBundledAsync(IProgress<string>? progress = null, CancellationToken ct = default)
     {
         string manifest = Path.Combine(BundledDirectory, "pytouchcode-runtime.json");
@@ -16,7 +20,11 @@ public sealed class RuntimeUpdates(string dataDirectory)
         string version = json.RootElement.GetProperty("version").GetString()!;
         int revision = json.RootElement.TryGetProperty("revision", out var r) ? r.GetInt32() : 1;
         string target = Path.Combine(dataDirectory, "runtimes", version + "-r" + revision);
-        if (File.Exists(Path.Combine(target, "pytouchcode-runtime.json"))) return Path.Combine(target, "python.exe");
+        if (Complete(target, version)) return Path.Combine(target, "python.exe");
+        // Keep an incomplete cache intact and publish a fresh copy beside it.
+        if (Directory.Exists(target)) target += "-repaired";
+        if (Complete(target, version)) return Path.Combine(target, "python.exe");
+        if (Directory.Exists(target)) target += "-" + Guid.NewGuid().ToString("N");
         progress?.Report("正在准备内置 Python " + version + "…");
         string staging = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
         Directory.CreateDirectory(staging);
@@ -51,7 +59,8 @@ public sealed class RuntimeUpdates(string dataDirectory)
     {
         if (!Version.TryParse(version, out _) || !version.StartsWith("3.13.")) throw new InvalidDataException("仅支持稳定版 Python 3.13 更新。");
         string target = Path.Combine(dataDirectory, "runtimes", version);
-        if (File.Exists(Path.Combine(target, "pytouchcode-runtime.json"))) return Path.Combine(target, "python.exe");
+        if (Complete(target, version)) return Path.Combine(target, "python.exe");
+        if (Directory.Exists(target)) target += "-" + Guid.NewGuid().ToString("N");
         string staging = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
         Directory.CreateDirectory(staging);
         string url = $"https://api.nuget.org/v3-flatcontainer/python/{version}/python.{version}.nupkg";
