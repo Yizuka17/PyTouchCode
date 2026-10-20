@@ -1,8 +1,13 @@
 param([string]$Package)
 $ErrorActionPreference = 'Stop'
 if (!$Package) {
-    $beside = Join-Path $PSScriptRoot 'PyTouchCode_0.1.3.0_x64.msix'
-    $Package = if (Test-Path -LiteralPath $beside) { $beside } else { Join-Path $PSScriptRoot '../artifacts/PyTouchCode_0.1.3.0_x64.msix' }
+    # Prefer a package next to the installer, then a locally built artifact.
+    $candidates = @(
+        Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'PyTouchCode_*_x64.msix' -File -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '../artifacts') -Filter 'PyTouchCode_*_x64.msix' -File -ErrorAction SilentlyContinue
+    ) | Sort-Object LastWriteTime -Descending
+    if (!$candidates) { throw 'No PyTouchCode MSIX found beside Install.ps1 or in artifacts.' }
+    $Package = $candidates[0].FullName
 }
 if ($PSVersionTable.PSEdition -eq 'Core') {
     & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File $PSCommandPath -Package $Package

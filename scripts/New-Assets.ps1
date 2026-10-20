@@ -1,7 +1,9 @@
+param([switch]$Force)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $root = Split-Path $PSScriptRoot -Parent
-$assets = Join-Path $root 'src/PyTouch.App/Assets'
+$assets = Join-Path $root 'src/PyTouchCode.App/Assets'
+if (!$Force -and (@('Logo44.png','Logo50.png','Logo150.png','Logo256.png','Logo310.png','PyTouchCode.ico') | Where-Object { !(Test-Path -LiteralPath (Join-Path $assets $_)) }).Count -eq 0) { return }
 New-Item -ItemType Directory -Force -Path $assets | Out-Null
 foreach ($size in @(44, 50, 150, 256, 310)) {
     $bitmap = [Drawing.Bitmap]::new($size, $size)
@@ -20,5 +22,5 @@ foreach ($size in @(44, 50, 150, 256, 310)) {
 }
 $bitmap = [Drawing.Bitmap]::new((Join-Path $assets 'Logo256.png'))
 $icon = [Drawing.Icon]::FromHandle($bitmap.GetHicon())
-$stream = [IO.File]::Create((Join-Path $assets 'PyTouch.ico'))
+$stream = [IO.File]::Create((Join-Path $assets 'PyTouchCode.ico'))
 try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose(); $bitmap.Dispose() }

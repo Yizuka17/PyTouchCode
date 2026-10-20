@@ -1,0 +1,121 @@
+name: Build PyTouchCode MSIX
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Avoid spending Windows runner time on superseded commits of the same PR.
+concurrency:
+  group: pytouchcode-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Windows x64 / signed test MSIX
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Show toolchain
+        shell: pwsh
+        run: |
+          dotnet --version
+          $PSVersionTable.PSVersion.ToString()
+          Get-Command pwsh, dotnet | Select-Object Name, Source
+
+      - name: Build and sign portable + MSIX
+        shell: pwsh
+        run: |
+          ./scripts/Package.ps1
+
+      - name: Verify package and portable payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = [xml](Get-Content ./packaging/AppxManifest.xml -Raw)
+          $version = $manifest.Package.Identity.Version
+          $v3 = ([version]$version).ToString(3)
+          $msix = "artifacts/PyTouchCode_${version}_x64.msix"
+          $portable = "artifacts/PyTouchCode_${v3}_portable_x64.zip"
+          $cer = "artifacts/PyTouchCode-Development.cer"
+          foreach ($path in @($msix, $portable, $cer, 'artifacts/package-info.json')) {
+            if (!(Test-Path -LiteralPath $path)) { throw "Missing build artifact: $path" }
+          }
+          $sdk = Join-Path $env:USERPROFILE '.nuget/packages/microsoft.windows.sdk.buildtools/10.0.26100.7627/bin/10.0.26100.0/x64'
+          # This CI job generates a self-signed developer certificate. Trust it
+          # temporarily in the ephemeral runner, verify, then remove the trust.
+          # Do not persist a trust anchor or private key as a GitHub artifact.
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            (Resolve-Path $cer).Path
+          )
+          $trustedRoot = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            'Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
+          try {
+            $trustedRoot.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $trustedRoot.Add($cert)
+            & (Join-Path $sdk 'signtool.exe') verify /pa /v $msix
+            if ($LASTEXITCODE) { throw 'MSIX signature verification failed' }
+          } finally {
+            try { $trustedRoot.Remove($cert) } finally { $trustedRoot.Close() }
+          }
+          # MakeAppx performs semantic validation while packing; it has no
+          # separate "validate" subcommand. Inspect the archive structure here.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $msix).Path)
+          try {
+            $entries = @($archive.Entries | ForEach-Object FullName)
+            foreach ($required in @('AppxManifest.xml', 'resources.pri', 'PyTouchCode.exe', 'Microsoft.UI.Xaml.dll')) {
+              if ($entries -notcontains $required) { throw "MSIX archive is missing $required" }
+            }
+          } finally { $archive.Dispose() }
+          Copy-Item ./scripts/Install.ps1 ./artifacts/Install.ps1 -Force
+          Get-FileHash $msix -Algorithm SHA256 | Format-List
+
+      - name: Core tests
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PyTouchCode.Tests -c Release -- ./runtime/python/python.exe
+          if ($LASTEXITCODE) { throw 'Core tests failed' }
+
+      - name: Upload signed installer and portable version
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PyTouchCode-0.1.4.1-x64-msix-and-portable
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            artifacts/*.msix
+            artifacts/*_portable_x64.zip
+            artifacts/*.cer
+            artifacts/Install.ps1
+            artifacts/package-info.json
+            artifacts/msix-pri-*.xml
+
+      - name: Upload PRI diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix-pri-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            artifacts/msix-pri-*.xml
+            artifacts/package-info.json

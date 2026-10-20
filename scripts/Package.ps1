@@ -1,24 +1,80 @@
 param([switch]$Install, [string]$CertificateThumbprint)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$packageVersion = ([xml](Get-Content (Join-Path $root 'packaging/AppxManifest.xml') -Raw)).Package.Identity.Version
+$manifest = [xml](Get-Content (Join-Path $root 'packaging/AppxManifest.xml') -Raw)
+$packageVersion = $manifest.Package.Identity.Version
+$packageName = $manifest.Package.Identity.Name
 $appVersion = ([version]$packageVersion).ToString(3)
+$project = Join-Path $root 'src/PyTouchCode.App/PyTouchCode.App.csproj'
+
 & (Join-Path $PSScriptRoot 'Build.ps1') -Configuration Release
-$output = Join-Path $root "artifacts/publish-$appVersion"
-dotnet publish (Join-Path $root 'src/PyTouch.App/PyTouch.App.csproj') -c Release -p:Platform=x64 -o $output -v:minimal
-if ($LASTEXITCODE) { throw 'Publish failed' }
-Copy-Item (Join-Path $root 'packaging/AppxManifest.xml') (Join-Path $output 'AppxManifest.xml') -Force
+
+# Keep a truly unpackaged build for portable users.
+$portableOutput = Join-Path $root "artifacts/publish-$appVersion"
+dotnet publish $project -c Release -p:Platform=x64 -o $portableOutput -v:minimal
+if ($LASTEXITCODE) { throw 'Portable publish failed' }
+# MSBuild may name the unpackaged PRI after the project (PyTouchCode.App)
+# rather than AssemblyName (PyTouchCode), depending on SDK tooling.
+$appPriFiles = @(Get-ChildItem -LiteralPath $portableOutput -Filter '*.pri' -File |
+    Where-Object { $_.Name -like 'PyTouchCode*.pri' })
+if ($appPriFiles.Count -eq 0) {
+    throw 'Portable publish did not include its own PyTouchCode .pri. The WinUI XAML index is required.'
+}
+
+# Rebuild the resource index for *package identity*. Simply packing the above
+# unpackaged publish output with MakeAppx gives the package no root resources.pri.
+# MSIX activation resolves XAML through that package PRI, not PyTouchCode.pri.
+$msixOutput = Join-Path $root "artifacts/msix-layout-$appVersion"
+$artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts')) + [IO.Path]::DirectorySeparatorChar
+if (![IO.Path]::GetFullPath($msixOutput).StartsWith($artifactRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'MSIX output must remain inside artifacts.' }
+if (Test-Path -LiteralPath $msixOutput) { Remove-Item -LiteralPath $msixOutput -Recurse -Force }
+dotnet publish $project -c Release -p:Platform=x64 `
+    "-p:ProjectPriFileName=resources.pri" `
+    "-p:ProjectPriIndexName=$packageName" `
+    "-p:WindowsAppSDKBootstrapAutoInitializeOptions_OnPackageIdentity_NoOp=true" `
+    "-p:WindowsAppSdkUndockedRegFreeWinRTInitialize=false" `
+    -o $msixOutput -v:minimal
+if ($LASTEXITCODE) { throw 'MSIX publish failed' }
+
+$pri = Join-Path $msixOutput 'resources.pri'
+if (!(Test-Path $pri)) {
+    throw 'MSIX publish did not produce resources.pri. Refusing to sign a package that cannot load MainWindow.xaml.'
+}
+
 $sdk = Join-Path $env:USERPROFILE '.nuget/packages/microsoft.windows.sdk.buildtools/10.0.26100.7627/bin/10.0.26100.0/x64'
-$makeappx = Join-Path $sdk 'makeappx.exe'; $signtool = Join-Path $sdk 'signtool.exe'
-if (!(Test-Path $makeappx)) { throw 'Restore the Windows SDK BuildTools package first.' }
+$makeappx = Join-Path $sdk 'makeappx.exe'
+$makepri = Join-Path $sdk 'makepri.exe'
+$signtool = Join-Path $sdk 'signtool.exe'
+foreach ($tool in @($makeappx, $makepri, $signtool)) {
+    if (!(Test-Path $tool)) { throw "Windows SDK tool not found: $tool" }
+}
+
+# Validate the root PRI *before* making and signing the MSIX. The resource map
+# must have the exact Identity.Name from AppxManifest.xml, and contain our XBF.
+$priDump = Join-Path $root "artifacts/msix-pri-$appVersion.xml"
+& $makepri dump /if $pri /of $priDump /o
+if ($LASTEXITCODE) { throw 'Unable to dump package resources.pri' }
+[xml]$priXml = Get-Content $priDump -Raw
+$map = $priXml.SelectSingleNode('/*[local-name()="PriInfo"]/*[local-name()="ResourceMap"]')
+if ($null -eq $map) { throw 'MSIX PRI dump contains no primary ResourceMap.' }
+if ($map.GetAttribute('name') -cne $packageName) {
+    throw "MSIX PRI resource map must be '$packageName' but was '$($map.GetAttribute('name'))'."
+}
+$priText = Get-Content $priDump -Raw
+foreach ($resource in @('App.xbf', 'MainWindow.xbf')) {
+    if (!$priText.Contains($resource)) { throw "MSIX resource index is missing $resource" }
+}
+
+Copy-Item (Join-Path $root 'packaging/AppxManifest.xml') (Join-Path $msixOutput 'AppxManifest.xml') -Force
 $package = Join-Path $root "artifacts/PyTouchCode_${packageVersion}_x64.msix"
-& $makeappx pack /d $output /p $package /o
+& $makeappx pack /d $msixOutput /p $package /o
 if ($LASTEXITCODE) { throw 'MSIX packaging failed' }
+
 if ($CertificateThumbprint) { $certificate = Get-Item "Cert:\CurrentUser\My\$CertificateThumbprint" }
 else {
     $certificate = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq 'CN=PyTouch Development' -and $_.NotAfter -gt (Get-Date).AddYears(16) -and $_.HasPrivateKey } | Select-Object -First 1
     if (!$certificate) {
-        $certificate = New-SelfSignedCertificate -Type Custom -Subject 'CN=PyTouch Development' -FriendlyName 'PyTouch MSIX Development (17 years)' -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable -KeyUsage DigitalSignature -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddYears(17) -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+        $certificate = New-SelfSignedCertificate -Type Custom -Subject 'CN=PyTouch Development' -FriendlyName 'PyTouchCode MSIX Development (17 years)' -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable -KeyUsage DigitalSignature -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddYears(17) -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
     }
 }
 if ($certificate.Subject -ne 'CN=PyTouch Development') { throw 'Publisher and certificate subject must match.' }
@@ -32,7 +88,7 @@ Write-Host "Certificate expires: $($certificate.NotAfter.ToString('yyyy-MM-dd'))
 $portable = Join-Path $root "artifacts/PyTouchCode_${appVersion}_portable_x64.zip"
 if (Test-Path -LiteralPath $portable) { Remove-Item -LiteralPath $portable }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($output, $portable, [IO.Compression.CompressionLevel]::Optimal, $false)
+[IO.Compression.ZipFile]::CreateFromDirectory($portableOutput, $portable, [IO.Compression.CompressionLevel]::Optimal, $false)
 Write-Host "Portable: $portable"
 if ($Install) {
     & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Install.ps1') -Package $package
@@ -40,5 +96,3 @@ if ($Install) {
     & $signtool verify /pa $package
     if ($LASTEXITCODE) { throw 'Signature verification failed' }
 }
-
-
