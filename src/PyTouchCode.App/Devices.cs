@@ -28,12 +28,12 @@ public sealed partial class MainWindow
         }
         finally { device.Output -= Capture; }
     }
-    Task ConnectDeviceAsync(string port)
+    async Task ConnectDeviceAsync(string port)
     {
         if (device.IsRunning) throw new InvalidOperationException("请先断开当前设备会话。");
-        selectedPort = port; deviceRepl = true; SelectChannel(3);
+        selectedPort = SerialDevices.ValidatePort(port); settings.DevicePort = selectedPort; settings.ExecutionTarget = "MicroPython"; UpdateInterpreter();
+        await store.SaveAsync(settings); deviceRepl = true; SelectChannel(3);
         _ = SafeAsync(async () => await device.RunAsync(DevicePython, ["-u", Path.Combine(AppContext.BaseDirectory, "tools", "serial_repl.py"), port], WorkingDirectory));
-        return Task.CompletedTask;
     }
     async Task InterruptDeviceAsync()
     {
@@ -64,16 +64,12 @@ public sealed partial class MainWindow
         }
         async Task Scan()
         {
-            var session = new ProcessSession(); var text = new StringBuilder(); session.Output += (s, _) => text.Append(s);
-            try
-            {
-                int code = await session.RunAsync(DevicePython, ["-c", "import json;from serial.tools.list_ports import comports;print(json.dumps([[p.device,p.description] for p in comports()]))"], WorkingDirectory);
-                if (code != 0) throw new IOException(text.ToString());
-                using var json = JsonDocument.Parse(text.ToString()); ports.Items.Clear();
-                foreach (var value in json.RootElement.EnumerateArray()) ports.Items.Add(value[0].GetString() + " " + value[1].GetString());
-                if (ports.Items.Count > 0) ports.SelectedIndex = 0; status.Text = $"发现 {ports.Items.Count} 个串口。设备须安装 MicroPython 固件。";
-            }
-            finally { await session.DisposeAsync(); }
+            var found = await SerialDevices.DiscoverAsync(DevicePython);
+            string previous = (ports.SelectedItem as string ?? ports.Text).Split(' ')[0];
+            ports.Items.Clear(); foreach (var value in found) ports.Items.Add(value.Port + " " + value.Description);
+            ports.SelectedItem = ports.Items.Cast<string>().FirstOrDefault(p => p.Split(' ')[0] == previous);
+            if (ports.SelectedItem is null && ports.Items.Count > 0) ports.SelectedIndex = 0;
+            status.Text = $"发现 {found.Count} 个串口";
         }
         scan.Click += async (_, _) => await Work(Scan);
         connect.Click += async (_, _) => await Work(async () => { await ConnectDeviceAsync(Port()); status.Text = "已连接。"; });

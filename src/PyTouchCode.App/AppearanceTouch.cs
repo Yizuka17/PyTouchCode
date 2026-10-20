@@ -17,6 +17,8 @@ public sealed partial class MainWindow
         if (Root.RequestedTheme != theme) Root.RequestedTheme = theme;
         SetUiFont(Root, new FontFamily(settings.UiFont), settings.UiFontSize, settings.UiFontWeight);
         ApplyMenuFonts();
+        if (settings.UseSystemAccent) FileSelectionIndicator.ClearValue(Border.BackgroundProperty);
+        else FileSelectionIndicator.Background = new SolidColorBrush(ParseColor(settings.Accent));
         try
         {
             SystemBackdrop = settings.Material switch

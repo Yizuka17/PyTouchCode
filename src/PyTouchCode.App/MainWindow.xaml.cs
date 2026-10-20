@@ -13,8 +13,10 @@ namespace PyTouchCode.App;
 public sealed partial class MainWindow : Window
 {
     public ShellViewModel ViewModel { get; } = new();
-    static string? SmokeDirectory { get { var args = Environment.GetCommandLineArgs(); int index = Array.IndexOf(args, "--smoke-test"); return index >= 0 && index + 1 < args.Length ? Path.GetFullPath(args[index + 1]) : null; } }
-    readonly SettingsStore store = new(SmokeDirectory is { } smoke ? Path.Combine(smoke, "settings") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PyTouchCode"));
+    static string? CommandDirectory(string option) { var args = Environment.GetCommandLineArgs(); int index = Array.IndexOf(args, option); return index >= 0 && index + 1 < args.Length ? Path.GetFullPath(args[index + 1]) : null; }
+    static string? SmokeDirectory => CommandDirectory("--smoke-test");
+    static string? PreviewDirectory => CommandDirectory("--preview-directory");
+    readonly SettingsStore store = new(SmokeDirectory is { } smoke ? Path.Combine(smoke, "settings") : PreviewDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PyTouchCode"));
     AppSettings settings = new();
     readonly ProcessSession runner = new(), shell = new(), repl = new(), device = new(), maintenance = new();
     readonly LanguageService language = new();
@@ -83,7 +85,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Resize(new Windows.Graphics.SizeInt32((int)Math.Min(1280 * scale, display.Width), (int)Math.Min(860 * scale, display.Height)));
         try
         {
-            if (SmokeDirectory is null) await AppDataMigration.MigrateAsync(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            if (SmokeDirectory is null && PreviewDirectory is null) await AppDataMigration.MigrateAsync(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
             settings = await store.LoadAsync();
         }
         catch (Exception e) { Notify("配置未加载：" + e.Message + " 原文件已保留，请修复配置后重新启动。"); return; }
@@ -94,13 +96,15 @@ public sealed partial class MainWindow : Window
         App.StartupPhase = "Runtime";
         var progress = new Progress<string>(value => ViewModel.InterpreterLabel = value);
         bundled = await new RuntimeUpdates(store.DirectoryPath).EnsureBundledAsync(progress);
-        if (!File.Exists(settings.Interpreter)) settings.Interpreter = bundled ?? "";
+        PythonEnvironments.SelectStartup(settings, bundled);
+        selectedPort = settings.DevicePort;
         UpdateInterpreter(); RefreshRecent();
         if (Directory.Exists(settings.Workspace)) await RefreshFilesAsync();
+        if (PreviewDirectory is not null && FileTree.RootNodes.Count > 0) FileTree.SelectedNode = FileTree.RootNodes[0];
         App.StartupPhase = "Ready";
         if (SmokeDirectory is not null) { await RunSmokeTestsAsync(SmokeDirectory); return; }
         foreach (string file in Environment.GetCommandLineArgs().Skip(1).Where(File.Exists)) await OpenDocumentAsync(file);
-        if (!settings.Initialized) await EnvironmentDialogAsync(true);
+        settings.Initialized = true;
         await store.SaveAsync(settings);
     }
     void AddShortcut(VirtualKey key, VirtualKeyModifiers modifiers, string command)
@@ -125,7 +129,7 @@ public sealed partial class MainWindow : Window
         }
     }
     void Notify(string message, bool error = false) { Notice.Message = message; Notice.Severity = error ? InfoBarSeverity.Error : InfoBarSeverity.Informational; Notice.IsOpen = true; }
-    void UpdateInterpreter() => ViewModel.InterpreterLabel = File.Exists(settings.Interpreter) ? "Python " + settings.Interpreter : "选择或配置 Python 环境…";
+    void UpdateInterpreter() => ViewModel.InterpreterLabel = settings.ExecutionTarget == "MicroPython" ? "MicroPython / Pyboard " + settings.DevicePort : File.Exists(settings.Interpreter) ? "Python " + settings.Interpreter : "选择解释器…";
     void ConnectOutput(ProcessSession session, int channel)
     {
         session.Output += (text, error) => QueueOutput(channel, text);
@@ -212,6 +216,12 @@ public sealed partial class MainWindow : Window
     }
     async Task RunFileAsync(bool debug)
     {
+        if (settings.ExecutionTarget == "MicroPython")
+        {
+            if (debug) { Notify("MicroPython 暂不支持断点调试。"); return; }
+            if (Active is not { } boardTab || !await SaveDocumentAsync(boardTab)) return;
+            await MpRemoteAsync(SerialDevices.ValidatePort(settings.DevicePort), "run", boardTab.Document.Path!); return;
+        }
         if (runner.IsRunning || debugger?.IsRunning == true) { Notify("请先停止当前运行或调试会话。"); return; }
         if (Active is not { } tab) return;
         if (!File.Exists(settings.Interpreter)) { await EnvironmentDialogAsync(); if (!File.Exists(settings.Interpreter)) return; }
@@ -242,6 +252,7 @@ public sealed partial class MainWindow : Window
     }
     Task StartReplAsync()
     {
+        if (settings.ExecutionTarget == "MicroPython") return device.IsRunning ? Task.CompletedTask : ConnectDeviceAsync(SerialDevices.ValidatePort(settings.DevicePort));
         if (!File.Exists(settings.Interpreter)) { Notify("请先选择 Python 环境。"); return Task.CompletedTask; }
         // Prompts, tracebacks and stdout share one pipe so concurrent readers
         // cannot reorder the prompt around a command's output.

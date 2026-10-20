@@ -6,7 +6,7 @@ distribution. Their respective licenses and notices continue to apply.
 | Component | Distribution / notice |
 | --- | --- |
 | .NET runtime | Microsoft .NET MIT license and bundled runtime notices |
-| Windows App SDK / WinUI | Microsoft Windows App SDK NuGet packages and accompanying notices |
+| Windows App SDK / WinUI | Microsoft Windows App SDK NuGet packages and accompanying notices; selection animation based on NavigationView, MIT notice in `ThirdPartyNotices/WinUI.txt` |
 | WinUIEdit 0.0.5-prerelease | Permission notice in `ThirdPartyNotices/WinUIEdit.txt` |
 | Scintilla | Permission notice in `ThirdPartyNotices/Scintilla.txt` |
 | Lexilla | Permission notice in `ThirdPartyNotices/Lexilla.txt` |

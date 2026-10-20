@@ -30,6 +30,9 @@ public sealed class AppSettings
     public bool UseTabs { get; set; }
     public bool WordWrap { get; set; }
     public string Interpreter { get; set; } = "";
+    public bool InterpreterSelectedByUser { get; set; }
+    public string ExecutionTarget { get; set; } = "Python";
+    public string DevicePort { get; set; } = "";
     public string Shell { get; set; } = "";
     public bool EnableShellProfile { get; set; }
     public string[] ShellArguments { get; set; } = [];
@@ -64,6 +67,8 @@ public sealed class AppSettings
         foreach (string name in new[] { EditorDarkScheme, EditorLightScheme, TerminalDarkScheme, TerminalLightScheme }) ColorSchemes.Resolve(this, name);
         IndentSize = Math.Clamp(IndentSize, 1, 8);
         if (Theme is not ("System" or "Dark" or "Light")) Theme = "System";
+        if (ExecutionTarget is not ("Python" or "MicroPython")) ExecutionTarget = "Python";
+        DevicePort ??= "";
         if (Material is not ("Mica" or "MicaAlt" or "Acrylic" or "Solid")) Material = "Solid";
     }
 }

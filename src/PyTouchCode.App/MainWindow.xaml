@@ -56,9 +56,15 @@
     <Pivot x:Name="SidebarPivot">
      <PivotItem Header="文件"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Content="打开文件夹" HorizontalAlignment="Stretch" Tag="folder" Click="MenuAction"/><Button x:Name="RefreshFilesButton" Grid.Column="1" Tag="refresh" Click="MenuAction" ToolTipService.ToolTip="刷新文件树" AutomationProperties.Name="刷新文件树"></Button></Grid>
-      <TreeView x:Name="FileTree" Grid.Row="1" SelectionMode="Single" ItemInvoked="FileInvoked" Expanding="FileExpanding" Collapsed="FileCollapsed" ContextRequested="FileTreeContextRequested">
+      <Grid x:Name="FileTreeHost" Grid.Row="1">
+      <TreeView x:Name="FileTree" SelectionChanged="FileTreeSelectionChanged" LayoutUpdated="FileTreeLayoutUpdated" SelectionMode="Single" ItemInvoked="FileInvoked" Expanding="FileExpanding" Collapsed="FileCollapsed" ContextRequested="FileTreeContextRequested">
        <!-- A TreeViewNode stores FileTreeEntry data, never a shared UIElement.
             WinUI creates/recycles the visual row from this template. -->
+       <TreeView.Resources>
+        <SolidColorBrush x:Key="TreeViewItemSelectionIndicatorForeground" Color="Transparent"/>
+        <SolidColorBrush x:Key="TreeViewItemSelectionIndicatorForegroundPointerOver" Color="Transparent"/>
+        <SolidColorBrush x:Key="TreeViewItemSelectionIndicatorForegroundPressed" Color="Transparent"/>
+       </TreeView.Resources>
        <TreeView.ItemTemplate>
         <DataTemplate x:DataType="TreeViewNode">
          <StackPanel Tag="{x:Bind}" Orientation="Horizontal" Spacing="8" ToolTipService.ToolTip="{x:Bind ((local:FileTreeEntry)Content).Path}">
@@ -68,6 +74,8 @@
         </DataTemplate>
        </TreeView.ItemTemplate>
       </TreeView>
+      <Border x:Name="FileSelectionIndicator" Width="3" Height="16" CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Top" IsHitTestVisible="False" Opacity="0"><Border.Style><Style TargetType="Border"><Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}"/></Style></Border.Style></Border>
+      </Grid>
      </Grid></PivotItem>
      <PivotItem Header="调试"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <StackPanel Spacing="8"><TextBlock x:Name="DebugState" Text="尚未启动调试" TextWrapping="Wrap"/><StackPanel Orientation="Horizontal" Spacing="4"><Button Content="继续" Tag="continue" Click="MenuAction"/><Button Content="跳过" Tag="next" Click="MenuAction"/><Button Content="进入" Tag="stepIn" Click="MenuAction"/></StackPanel></StackPanel>
@@ -97,9 +105,9 @@
   </Grid>
   <Grid Grid.Row="3" x:Name="StatusBar" Padding="12,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-   <Button x:Name="InterpreterButton" Content="{x:Bind ViewModel.InterpreterLabel, Mode=OneWay}" Tag="environment" Click="MenuAction" FontSize="12" Padding="4,0" BorderThickness="0" Background="Transparent" HorizontalAlignment="Left" MaxWidth="600"/>
-   <TextBlock x:Name="PositionStatus" Grid.Column="1" Text="行 1，列 1" FontSize="12" VerticalAlignment="Center" Margin="12,0"/>
-   <TextBlock x:Name="EncodingStatus" Grid.Column="2" Text="UTF-8 LF 4 空格" FontSize="12" VerticalAlignment="Center"/>
+   <Button x:Name="InterpreterButton" Content="{x:Bind ViewModel.InterpreterLabel, Mode=OneWay}" Tag="environment" Click="MenuAction" FontSize="12" Padding="4,0" BorderThickness="0" Background="Transparent" HorizontalAlignment="Right" Grid.Column="2" MaxWidth="600"/>
+   <TextBlock x:Name="PositionStatus" Grid.Column="0" Text="行 1，列 1" FontSize="12" VerticalAlignment="Center" Margin="12,0"/>
+   <TextBlock x:Name="EncodingStatus" Grid.Column="1" Text="UTF-8 LF 4 空格" FontSize="12" VerticalAlignment="Center"/>
   </Grid>
  </Grid>
 </Window>
