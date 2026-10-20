@@ -5,7 +5,7 @@ $manifest = [xml](Get-Content (Join-Path $root 'packaging/AppxManifest.xml') -Ra
 $packageVersion = $manifest.Package.Identity.Version
 $packageName = $manifest.Package.Identity.Name
 $appVersion = ([version]$packageVersion).ToString(3)
-$project = Join-Path $root 'src/PyTouch.App/PyTouch.App.csproj'
+$project = Join-Path $root 'src/PyTouchCode.App/PyTouchCode.App.csproj'
 
 & (Join-Path $PSScriptRoot 'Build.ps1') -Configuration Release
 
@@ -13,19 +13,21 @@ $project = Join-Path $root 'src/PyTouch.App/PyTouch.App.csproj'
 $portableOutput = Join-Path $root "artifacts/publish-$appVersion"
 dotnet publish $project -c Release -p:Platform=x64 -o $portableOutput -v:minimal
 if ($LASTEXITCODE) { throw 'Portable publish failed' }
-# MSBuild may name the unpackaged PRI after the project (PyTouch.App)
+# MSBuild may name the unpackaged PRI after the project (PyTouchCode.App)
 # rather than AssemblyName (PyTouchCode), depending on SDK tooling.
 $appPriFiles = @(Get-ChildItem -LiteralPath $portableOutput -Filter '*.pri' -File |
-    Where-Object { $_.Name -like 'PyTouch*.pri' })
+    Where-Object { $_.Name -like 'PyTouchCode*.pri' })
 if ($appPriFiles.Count -eq 0) {
-    throw 'Portable publish did not include its own PyTouch .pri. The WinUI XAML index is required.'
+    throw 'Portable publish did not include its own PyTouchCode .pri. The WinUI XAML index is required.'
 }
 
 # Rebuild the resource index for *package identity*. Simply packing the above
 # unpackaged publish output with MakeAppx gives the package no root resources.pri.
 # MSIX activation resolves XAML through that package PRI, not PyTouchCode.pri.
 $msixOutput = Join-Path $root "artifacts/msix-layout-$appVersion"
-if (Test-Path $msixOutput) { Remove-Item $msixOutput -Recurse -Force }
+$artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts')) + [IO.Path]::DirectorySeparatorChar
+if (![IO.Path]::GetFullPath($msixOutput).StartsWith($artifactRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'MSIX output must remain inside artifacts.' }
+if (Test-Path -LiteralPath $msixOutput) { Remove-Item -LiteralPath $msixOutput -Recurse -Force }
 dotnet publish $project -c Release -p:Platform=x64 `
     "-p:ProjectPriFileName=resources.pri" `
     "-p:ProjectPriIndexName=$packageName" `
@@ -72,7 +74,7 @@ if ($CertificateThumbprint) { $certificate = Get-Item "Cert:\CurrentUser\My\$Cer
 else {
     $certificate = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq 'CN=PyTouch Development' -and $_.NotAfter -gt (Get-Date).AddYears(16) -and $_.HasPrivateKey } | Select-Object -First 1
     if (!$certificate) {
-        $certificate = New-SelfSignedCertificate -Type Custom -Subject 'CN=PyTouch Development' -FriendlyName 'PyTouch MSIX Development (17 years)' -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable -KeyUsage DigitalSignature -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddYears(17) -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+        $certificate = New-SelfSignedCertificate -Type Custom -Subject 'CN=PyTouch Development' -FriendlyName 'PyTouchCode MSIX Development (17 years)' -KeyAlgorithm RSA -KeyLength 3072 -HashAlgorithm SHA256 -KeyExportPolicy NonExportable -KeyUsage DigitalSignature -CertStoreLocation 'Cert:\CurrentUser\My' -NotAfter (Get-Date).AddYears(17) -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
     }
 }
 if ($certificate.Subject -ne 'CN=PyTouch Development') { throw 'Publisher and certificate subject must match.' }

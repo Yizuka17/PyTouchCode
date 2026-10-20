@@ -8,7 +8,7 @@ on:
 
 # Avoid spending Windows runner time on superseded commits of the same PR.
 concurrency:
-  group: pytouch-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: pytouchcode-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -90,14 +90,14 @@ jobs:
       - name: Core tests
         shell: pwsh
         run: |
-          dotnet run --project tests/PyTouch.Tests -c Release -- ./runtime/python/python.exe
+          dotnet run --project tests/PyTouchCode.Tests -c Release -- ./runtime/python/python.exe
           if ($LASTEXITCODE) { throw 'Core tests failed' }
 
       - name: Upload signed installer and portable version
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: PyTouchCode-0.1.3.3-x64-msix-and-portable
+          name: PyTouchCode-0.1.4.1-x64-msix-and-portable
           retention-days: 14
           if-no-files-found: error
           compression-level: 0

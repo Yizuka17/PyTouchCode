@@ -1,5 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
- <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net9.0</TargetFramework></PropertyGroup>
- <ItemGroup><ProjectReference Include="../../src/PyTouch.Core/PyTouch.Core.csproj"/></ItemGroup>
- <ItemGroup><Content Include="../../scripts/extract_tcltk.py" Link="tools/extract_tcltk.py" CopyToOutputDirectory="PreserveNewest"/></ItemGroup>
-</Project>

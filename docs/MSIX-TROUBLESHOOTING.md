@@ -1,55 +1,15 @@
-# MSIX XAML startup crash: resource index repair
+# MSIX 启动修复
 
-## Symptom
+0.1.3 的安装版在加载主窗口 XAML 时崩溃。安装包缺少以包标识命名的根资源索引，便携版测试未覆盖这个问题。
 
-A portable PyTouchCode EXE starts, but the manually assembled MSIX fails during
-`MainWindow.InitializeComponent()` with `XamlParseException` / `0xC000027B`.
-The crash log (usually `%TEMP%\PyTouch-crash.log`) has startup phase
-`MainWindow XAML`.
+打包脚本现在分别发布便携版和安装版，为安装版生成 `resources.pri`，检查资源映射名称和 `App.xbf`、`MainWindow.xbf`。同时保留已有包标识与签名发布者，支持直接升级。文件树改用数据模板，修复展开子文件夹时的崩溃。
 
-## Likely cause
+```powershell
+./scripts/Package.ps1
+./scripts/Test-MSIX.ps1 -Package ./artifacts/PyTouchCode_0.1.4.1_x64.msix
+./scripts/Test-UI.ps1
+```
 
-`WindowsPackageType=None` builds a WinUI 3 executable for *unpackaged* activation.
-The Windows App SDK unpackaged publish path may omit the project's own `.pri`.
-Moreover, a package with identity expects a root `resources.pri` whose primary
-resource-map name matches the package `Identity.Name`. Simply invoking
-`MakeAppx pack` on an unpackaged publish folder is not sufficient.
+`Test-MSIX.ps1` 安装后通过开始菜单使用的应用标识激活，运行实际 WinUI 窗口、编辑器和 Python 进程测试。报告保存在 `artifacts/msix-verified-*/ui-smoke.json`。启动异常写入 `%TEMP%\PyTouchCode-crash.log`。
 
-References:
-- https://github.com/microsoft/WindowsAppSDK/issues/6720
-- https://github.com/microsoft/microsoft-ui-xaml/issues/10856
-- https://learn.microsoft.com/en-us/windows/uwp/app-resources/resource-management-system
-
-## What the fix changes
-
-- Adds the missing app PRI to ordinary `dotnet publish`.
-- Builds a separate MSIX layout with `ProjectPriFileName=resources.pri` and
-  `ProjectPriIndexName` equal to the package identity.
-- Runs `MakePri dump`, refusing to package if the root resource map is incorrect
-  or `App.xbf` / `MainWindow.xbf` cannot be found.
-- Leaves the portable folder untouched and retains the existing sign/verify path.
-- Increments only the MSIX revision from 0.1.3.0 to 0.1.3.1 so the installed
-  test package can be upgraded without uninstalling the old package.
-
-## Build / test on Windows
-
-1. In the repository root, run `./scripts/Package.ps1` under PowerShell.
-2. Verify `artifacts/msix-pri-0.1.3.xml` includes
-   `ResourceMap name="PyTouchCode.PyTouch"`, `App.xbf` and `MainWindow.xbf`.
-3. Install `artifacts/PyTouchCode_0.1.3.1_x64.msix` with the exported development
-   certificate; using the existing elevated `Install.ps1` is supported.
-4. Launch the installed app **from Start** (not `artifacts/publish-0.1.3`).
-   Confirm the main window opens, then create/edit/save a file and run Python.
-5. In a fresh attempt, check `%TEMP%\PyTouch-crash.log` and the Application
-   event log for new errors. Old crashes from 0.1.3.0 may remain in the logs.
-6. Verify the portable build still starts and run `./scripts/Test-UI.ps1`.
-
-## Verification status
-
-This change is a targeted **candidate fix** based on an upstream reproduced
-WinUI 3 bug and the supplied crash stack. It has not yet been compiled or
-launched on Windows in this environment. Passing the PRI preflight proves
-resource inclusion but does **not** replace a real installed-MSIX smoke test.
-
-If the installed app still crashes, capture the *new* WinUI/XAML exception and
-inspect the underlying WinRT originate error before changing unrelated code.
+资源索引要求参见 [Microsoft UI XAML 手动打包讨论](https://github.com/microsoft/microsoft-ui-xaml/discussions/9121)。

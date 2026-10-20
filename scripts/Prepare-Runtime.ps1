@@ -2,7 +2,7 @@ param([string]$Version = '3.13.16')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $target = Join-Path $root 'runtime/python'
-if ((Test-Path (Join-Path $target 'pytouch-runtime.json')) -and (Test-Path (Join-Path $target 'DLLs/_tkinter.pyd')) -and ((Get-Content (Join-Path $target 'pytouch-runtime.json') -Raw | ConvertFrom-Json).revision -eq 2)) { Write-Host 'Bundled runtime already prepared.'; exit 0 }
+if ((Test-Path (Join-Path $target 'pytouchcode-runtime.json')) -and (Test-Path (Join-Path $target 'DLLs/_tkinter.pyd')) -and ((Get-Content (Join-Path $target 'pytouchcode-runtime.json') -Raw | ConvertFrom-Json).revision -eq 2)) { Write-Host 'Bundled runtime already prepared.'; exit 0 }
 $cache = Join-Path $root 'artifacts/downloads'
 New-Item -ItemType Directory -Force -Path $cache, $target | Out-Null
 $archive = Join-Path $cache "python.$Version.nupkg"
@@ -38,6 +38,6 @@ if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notl
 & $python (Join-Path $PSScriptRoot 'extract_tcltk.py') $tcltk $target (Join-Path $cache "tcltk-$Version")
 if ($LASTEXITCODE) { throw 'Tcl/Tk extraction failed.' }
 $manifest = @{ version = $Version; revision = 2; source = $url; sha512 = $expected; tcltkSha256 = (Get-FileHash $tcltk -Algorithm SHA256).Hash; preparedUtc = [DateTime]::UtcNow.ToString('O') }
-$manifest | ConvertTo-Json | Set-Content (Join-Path $target 'pytouch-runtime.json') -Encoding utf8
+$manifest | ConvertTo-Json | Set-Content (Join-Path $target 'pytouchcode-runtime.json') -Encoding utf8
 & $python -m pip freeze | Set-Content (Join-Path $target 'requirements.lock.txt') -Encoding utf8
 Write-Host "Prepared runtime: $target"
