@@ -8,6 +8,7 @@ public sealed class AppSettings
     public bool Initialized { get; set; }
     public string Theme { get; set; } = "System";
     public string Material { get; set; } = "Mica";
+    public double MaterialTransparency { get; set; } = .5;
     public string Accent { get; set; } = "#4C9AFF";
     public bool UseSystemAccent { get; set; } = true;
     public string UiFont { get; set; } = "Segoe UI Variable";
@@ -52,6 +53,8 @@ public sealed class AppSettings
             throw new InvalidDataException("配置包含无效的空值。");
         if (new[] { UiFont, EditorFont, TerminalFont }.Any(x => string.IsNullOrWhiteSpace(x) || x.Length > 128)) throw new InvalidDataException("字体名称无效。");
         if (new[] { UiFontSize, EditorFontSize, TerminalFontSize, EditorLineHeight, TerminalLineHeight }.Any(n => !double.IsFinite(n))) throw new InvalidDataException("字号或行高无效。");
+        if (!double.IsFinite(MaterialTransparency)) throw new InvalidDataException("材质透明度无效。");
+        MaterialTransparency = Math.Clamp(MaterialTransparency, 0, 1);
         UiFontSize = Math.Clamp(UiFontSize, 10, 24);
         EditorFontSize = Math.Clamp(EditorFontSize, 9, 40);
         TerminalFontSize = Math.Clamp(TerminalFontSize, 9, 32);

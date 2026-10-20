@@ -21,6 +21,15 @@ public sealed partial class MainWindow
         var appearance = Form(); var editor = Form(); var terminal = Form();
         var theme = Choice("应用主题", ["System", "Dark", "Light"], settings.Theme);
         var material = Choice("窗口材质", ["Mica", "MicaAlt", "Acrylic", "Solid"], settings.Material);
+        var transparency = new Slider { Name = "MaterialTransparency", Header = $"材质透明度 {settings.MaterialTransparency:P0}", Minimum = 0, Maximum = 100, StepFrequency = 1, Value = settings.MaterialTransparency * 100, IsEnabled = settings.Material != "Solid" };
+        void PreviewMaterial()
+        {
+            transparency.IsEnabled = material.SelectedItem as string != "Solid";
+            transparency.Header = $"材质透明度 {transparency.Value / 100:P0}";
+            ApplyWindowMaterial((string)material.SelectedItem, transparency.Value / 100);
+        }
+        transparency.ValueChanged += (_, _) => PreviewMaterial();
+        material.SelectionChanged += (_, _) => PreviewMaterial();
         var accent = Field("自定义强调色", settings.Accent); var systemAccent = Check("跟随 Windows 强调色", settings.UseSystemAccent);
         var uiFont = FontChoice("界面字体", settings.UiFont); var editorFont = FontChoice("编辑器字体", settings.EditorFont); var terminalFont = FontChoice("终端字体", settings.TerminalFont);
         var uiSize = Number("界面字号", settings.UiFontSize, 10, 24);
@@ -35,7 +44,7 @@ public sealed partial class MainWindow
         var shellArgs = Field("附加启动参数（JSON 数组）", JsonSerializer.Serialize(settings.ShellArguments));
         var env = Field("进程环境变量（JSON 对象）", JsonSerializer.Serialize(settings.Environment)); env.AcceptsReturn = true; env.MinHeight = 80;
         var editorPalette = ColorSchemes.ForEditor(settings, Root.ActualTheme == ElementTheme.Dark); var terminalPalette = ColorSchemes.ForTerminal(settings, Root.ActualTheme == ElementTheme.Dark);
-        Add(appearance, theme, material, systemAccent, accent, uiFont, uiSize, uiWeight, FontPreview(uiFont, uiSize, uiWeight, editorPalette));
+        Add(appearance, theme, material, transparency, systemAccent, accent, uiFont, uiSize, uiWeight, FontPreview(uiFont, uiSize, uiWeight, editorPalette));
         Add(editor, editorFont, editorSize, editorWeight, editorHeight, FontPreview(editorFont, editorSize, editorWeight, editorPalette, editorHeight), indent, tabs, wrap, complete, ghost);
         Add(terminal, terminalFont, terminalSize, terminalWeight, terminalHeight, FontPreview(terminalFont, terminalSize, terminalWeight, terminalPalette, terminalHeight), shellPath, profile, shellArgs, env);
         var navigation = NavigationTabs(("外观", Scroll(appearance)), ("配色方案", Scroll(schemes.View)), ("编辑器", Scroll(editor)), ("终端", Scroll(terminal)));
@@ -54,6 +63,7 @@ public sealed partial class MainWindow
                 if (arguments.Any(x => x is null) || variables.Any(x => string.IsNullOrWhiteSpace(x.Key) || x.Key.Contains('=') || x.Value is null)) throw new InvalidDataException("环境变量或启动参数无效。");
                 var candidate = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(settings), SettingsStore.JsonOptions)!;
                 candidate.Theme = (string)theme.SelectedItem; candidate.Material = (string)material.SelectedItem; candidate.UseSystemAccent = systemAccent.IsChecked == true; candidate.Accent = accent.Text;
+                candidate.MaterialTransparency = transparency.Value / 100;
                 candidate.UiFont = FontName(uiFont); candidate.EditorFont = FontName(editorFont); candidate.TerminalFont = FontName(terminalFont);
                 candidate.UiFontSize = uiSize.Value; candidate.UiFontWeight = FontWeightValue(uiWeight);
                 candidate.EditorFontSize = editorSize.Value; candidate.TerminalFontSize = terminalSize.Value; candidate.IndentSize = (int)indent.Value;
@@ -65,7 +75,11 @@ public sealed partial class MainWindow
             }
             catch (Exception ex) { args.Cancel = true; error.Text = ex.Message; }
         };
-        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary && accepted is not null) { settings = accepted; ApplyAppearance(); await store.SaveAsync(settings); }
+        try
+        {
+            if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary && accepted is not null) { settings = accepted; await store.SaveAsync(settings); }
+        }
+        finally { ApplyAppearance(); }
     }
     async Task EnvironmentDialogAsync(bool firstRun = false)
     {
@@ -211,6 +225,7 @@ public sealed partial class MainWindow
         {
             if (fetched is null) return;
             settings.Theme = fetched.Theme; settings.Material = fetched.Material; settings.Accent = fetched.Accent; settings.UseSystemAccent = fetched.UseSystemAccent;
+            settings.MaterialTransparency = fetched.MaterialTransparency;
             settings.UiFont = fetched.UiFont; settings.EditorFont = fetched.EditorFont; settings.EditorFontSize = fetched.EditorFontSize;
             settings.UiFontSize = fetched.UiFontSize; settings.UiFontWeight = fetched.UiFontWeight;
             settings.EditorFontWeight = fetched.EditorFontWeight; settings.TerminalFontWeight = fetched.TerminalFontWeight;
