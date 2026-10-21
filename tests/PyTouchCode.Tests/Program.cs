@@ -177,8 +177,11 @@ await Test("Serial scanning and execution target settings", async () =>
     Assert(SerialDevices.ValidatePort("com17") == "COM17", "COM port was not normalized");
     foreach (string invalid in new[] { "COM0", "COM1 anything", "../port" })
         await Throws<InvalidDataException>(() => { SerialDevices.ValidatePort(invalid); return Task.CompletedTask; });
-    var ports = await SerialDevices.DiscoverAsync(python);
+    var ports = await SerialDevices.DiscoverAsync();
     Assert(ports.All(p => p.Port.StartsWith("COM")), "Invalid serial scan results");
+    Assert(ports.Select(p => p.Port).Distinct().Count() == ports.Count, "Duplicate ports were returned");
+    using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+    await Throws<OperationCanceledException>(async () => await SerialDevices.DiscoverAsync(cancelled.Token));
     var store = new SettingsStore(Path.Combine(temporary, "device-settings"));
     await store.SaveAsync(new AppSettings { ExecutionTarget = "MicroPython", DevicePort = "COM17" });
     var loaded = await store.LoadAsync(); Assert(loaded.ExecutionTarget == "MicroPython" && loaded.DevicePort == "COM17", "Device target was lost");

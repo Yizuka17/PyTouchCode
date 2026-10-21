@@ -426,6 +426,12 @@ public sealed partial class MainWindow
             Assert(Path.GetDirectoryName(repaired) != broken && File.Exists(Path.Combine(broken, "python.exe")), "Repair replaced the incomplete cache in place");
             Assert(await PythonEnvironments.ProbeAsync(repaired) is not null, "Repaired Python cannot start");
         });
+        await Test("native serial discovery is independent of the Python interpreter", async () =>
+        {
+            var ports = await SerialDevices.DiscoverAsync();
+            await File.WriteAllTextAsync(Path.Combine(directory, "serial-discovery.json"), JsonSerializer.Serialize(ports, SettingsStore.JsonOptions));
+            Assert(ports.All(p => p.Port.StartsWith("COM")), "Serial discovery returned an invalid port");
+        });
         await Test("interpreter selector includes MicroPython and serial scan and cancels cleanly", async () =>
         {
             IEnumerable<T> Elements<T>(DependencyObject root) where T : DependencyObject
@@ -435,6 +441,8 @@ public sealed partial class MainWindow
                     foreach (var child in Elements<T>(VisualTreeHelper.GetChild(root, n))) yield return child;
             }
             string oldTarget = settings.ExecutionTarget, oldPort = settings.DevicePort;
+            string? oldBundled = bundled; string oldInterpreter = settings.Interpreter;
+            bundled = settings.Interpreter = Path.Combine(directory, "missing-python.exe");
             var opening = EnvironmentDialogAsync();
             ContentDialog? dialog = null;
             await Wait(() => { dialog = VisualTreeHelper.GetOpenPopupsForXamlRoot(Root.XamlRoot).Where(p => p.Child is not null).SelectMany(p => Elements<ContentDialog>(p.Child)).FirstOrDefault(); return dialog is not null; });
@@ -445,13 +453,40 @@ public sealed partial class MainWindow
                 await Wait(() => selector.IsEnabled); selector.SelectedIndex = 1; await Wait(() => selector.IsEnabled);
                 Assert(Elements<ComboBox>(dialog!).Any(c => c.Header as string == "USB 串口"), "MicroPython has no port selector");
                 Assert(Elements<Button>(dialog!).Any(b => b.Content as string == "扫描串口"), "MicroPython has no scan action");
+                var scan = Elements<Button>(dialog!).First(b => b.Content as string == "扫描串口");
+                var peer = new Microsoft.UI.Xaml.Automation.Peers.ButtonAutomationPeer(scan);
+                ((Microsoft.UI.Xaml.Automation.Provider.IInvokeProvider)peer.GetPattern(Microsoft.UI.Xaml.Automation.Peers.PatternInterface.Invoke)).Invoke();
+                await Wait(() => Elements<TextBlock>(dialog!).Any(t => t.Name == "InterpreterStatus" && (t.Text.StartsWith("发现 ") || t.Text.StartsWith("未发现串口"))));
+                var ports = Elements<ComboBox>(dialog!).First(c => c.Header as string == "USB 串口");
+                Assert(ports.Items.All(p => p is SerialDevice), "Interpreter serial results are not usable device entries");
                 await Snapshot(dialog!, "interpreter-micropython.png");
             }
-            finally { dialog!.Hide(); await opening; }
+            finally { dialog!.Hide(); await opening; bundled = oldBundled; settings.Interpreter = oldInterpreter; }
             Assert(settings.ExecutionTarget == oldTarget && settings.DevicePort == oldPort, "Cancel changed the selected interpreter");
             settings.ExecutionTarget = "MicroPython"; settings.DevicePort = "COM65535"; UpdateInterpreter();
             Assert(ViewModel.InterpreterLabel.Contains("MicroPython") && ViewModel.InterpreterLabel.Contains("COM65535"), "Status bar did not show the board target");
             settings.ExecutionTarget = oldTarget; settings.DevicePort = oldPort; UpdateInterpreter();
+        });
+        await Test("device panel scans native ports when opened", async () =>
+        {
+            IEnumerable<T> Elements<T>(DependencyObject root) where T : DependencyObject
+            {
+                if (root is T value) yield return value;
+                for (int n = 0; n < VisualTreeHelper.GetChildrenCount(root); n++)
+                    foreach (var child in Elements<T>(VisualTreeHelper.GetChild(root, n))) yield return child;
+            }
+            string? oldBundled = bundled; string oldInterpreter = settings.Interpreter;
+            bundled = settings.Interpreter = Path.Combine(directory, "missing-python.exe");
+            var opening = DeviceDialogAsync(); ContentDialog? dialog = null;
+            await Wait(() => { dialog = VisualTreeHelper.GetOpenPopupsForXamlRoot(Root.XamlRoot).Where(p => p.Child is not null).SelectMany(p => Elements<ContentDialog>(p.Child)).FirstOrDefault(); return dialog is not null; });
+            try
+            {
+                await Wait(() => Elements<TextBlock>(dialog!).Any(t => t.Name == "DeviceStatus" && (t.Text.StartsWith("发现 ") || t.Text.StartsWith("未发现串口"))));
+                var ports = Elements<ComboBox>(dialog!).First(c => c.Header as string == "USB 串口");
+                Assert(ports.Items.All(p => p is SerialDevice), "Device panel serial results are not usable device entries");
+                await Snapshot(dialog!, "device-serial-scan.png");
+            }
+            finally { dialog!.Hide(); await opening; bundled = oldBundled; settings.Interpreter = oldInterpreter; }
         });
         await Test("file selection renders stretch and contraction between native animation frames", async () =>
         {

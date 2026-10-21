@@ -88,7 +88,7 @@ public sealed partial class MainWindow
         var panel = Form(); var pythonPanel = Form(); var boardPanel = Form();
         var path = Field("python.exe 路径", settings.Interpreter);
         var environments = new ComboBox { Header = "Python 环境", HorizontalAlignment = HorizontalAlignment.Stretch };
-        var status = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var status = new TextBlock { Name = "InterpreterStatus", TextWrapping = TextWrapping.Wrap };
         var scan = new Button { Content = "扫描 Python / Conda / venv" }; var browse = new Button { Content = "浏览 python.exe…" };
         var ports = new ComboBox { Header = "USB 串口", IsEditable = true, Text = settings.DevicePort, HorizontalAlignment = HorizontalAlignment.Stretch };
         var scanPorts = new Button { Content = "扫描串口" };
@@ -103,7 +103,7 @@ public sealed partial class MainWindow
             {
                 if (board)
                 {
-                    var found = await SerialDevices.DiscoverAsync(DevicePython, lifetime.Token);
+                    var found = await SerialDevices.DiscoverAsync(lifetime.Token);
                     string previous = (ports.SelectedItem as SerialDevice)?.Port ?? ports.Text;
                     ports.Items.Clear(); foreach (var value in found) ports.Items.Add(value);
                     ports.SelectedItem = found.FirstOrDefault(x => string.Equals(x.Port, previous, StringComparison.OrdinalIgnoreCase)) ?? found.FirstOrDefault();

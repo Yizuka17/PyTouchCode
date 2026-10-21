@@ -43,8 +43,9 @@ public sealed partial class MainWindow
     }
     async Task DeviceDialogAsync()
     {
+        using var lifetime = new CancellationTokenSource();
         var panel = Form(); var ports = new ComboBox { Header = "USB 串口", IsEditable = true, Text = selectedPort, HorizontalAlignment = HorizontalAlignment.Stretch };
-        var status = new TextBlock { TextWrapping = TextWrapping.Wrap }; var scan = new Button { Content = "扫描串口" };
+        var status = new TextBlock { Name = "DeviceStatus", TextWrapping = TextWrapping.Wrap }; var scan = new Button { Content = "扫描串口" };
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var connect = new Button { Content = "连接 REPL" }; var disconnect = new Button { Content = "断开" }; actions.Children.Add(connect); actions.Children.Add(disconnect);
         var controls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 }; var interrupt = new Button { Content = "停止 (Ctrl+C)" }; var reboot = new Button { Content = "软重启 (Ctrl+D)" }; controls.Children.Add(interrupt); controls.Children.Add(reboot);
@@ -54,22 +55,28 @@ public sealed partial class MainWindow
         var confirmDelete = Check("我确认删除上述设备路径中的文件", false); var delete = new Button { Content = "删除设备文件" };
         remotePath.TextChanged += (_, _) => confirmDelete.IsChecked = false;
         bool operating = false;
-        string Port() { string value = (ports.SelectedItem as string ?? ports.Text).Split(' ')[0].Trim(); if (!System.Text.RegularExpressions.Regex.IsMatch(value, @"^COM[1-9]\d*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) throw new InvalidDataException("请输入有效 COM 端口，例如 COM3。"); return value; }
+        string Port() => SerialDevices.ValidatePort((ports.SelectedItem as SerialDevice)?.Port ?? ports.Text);
         async Task Work(Func<Task> action)
         {
             if (operating) return; operating = true;
             try { await action(); }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
             catch (Exception e) { status.Text = e.Message; }
             finally { operating = false; }
         }
         async Task Scan()
         {
-            var found = await SerialDevices.DiscoverAsync(DevicePython);
-            string previous = (ports.SelectedItem as string ?? ports.Text).Split(' ')[0];
-            ports.Items.Clear(); foreach (var value in found) ports.Items.Add(value.Port + " " + value.Description);
-            ports.SelectedItem = ports.Items.Cast<string>().FirstOrDefault(p => p.Split(' ')[0] == previous);
-            if (ports.SelectedItem is null && ports.Items.Count > 0) ports.SelectedIndex = 0;
-            status.Text = $"发现 {found.Count} 个串口";
+            scan.IsEnabled = false; status.Text = "正在扫描…";
+            try
+            {
+                var found = await SerialDevices.DiscoverAsync(lifetime.Token);
+                string previous = (ports.SelectedItem as SerialDevice)?.Port ?? ports.Text;
+                ports.Items.Clear(); foreach (var value in found) ports.Items.Add(value);
+                ports.SelectedItem = found.FirstOrDefault(p => string.Equals(p.Port, previous, StringComparison.OrdinalIgnoreCase)) ?? found.FirstOrDefault();
+                if (ports.SelectedItem is null) ports.Text = previous;
+                status.Text = found.Count == 0 ? "未发现串口，可连接设备后重试。" : $"发现 {found.Count} 个串口";
+            }
+            finally { scan.IsEnabled = true; }
         }
         scan.Click += async (_, _) => await Work(Scan);
         connect.Click += async (_, _) => await Work(async () => { await ConnectDeviceAsync(Port()); status.Text = "已连接。"; });
@@ -118,6 +125,7 @@ public sealed partial class MainWindow
         Add(panel, ports, scan, actions, controls, run, remotePath, listButton, list, download, upload, confirmDelete, delete, status);
         var dialog = new ContentDialog { Title = "MicroPython 设备", Content = Scroll(panel), CloseButtonText = "完成" };
         dialog.Opened += async (_, _) => await Work(Scan);
+        dialog.Closed += (_, _) => lifetime.Cancel();
         await ShowDialogAsync(dialog);
     }
 }
