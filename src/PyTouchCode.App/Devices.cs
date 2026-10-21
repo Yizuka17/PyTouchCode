@@ -12,7 +12,6 @@ public sealed partial class MainWindow
     readonly SemaphoreSlim deviceOperations = new(1, 1);
     CancellationTokenSource? deviceCommand;
     bool deviceStopping;
-    bool replacingDeviceRepl;
     void DeviceLog(string message)
     {
         try { File.AppendAllText(Path.Combine(store.DirectoryPath, "device.log"), $"{DateTimeOffset.Now:O} {message}\n"); }
@@ -48,9 +47,7 @@ public sealed partial class MainWindow
             // Only the idle REPL may be replaced automatically. A second Run
             // must never kill the command that is already executing.
             if (device.IsRunning && !deviceRepl) throw new InvalidOperationException("设备正在执行任务，请先停止。");
-            replacingDeviceRepl = deviceRepl;
-            try { await WaitStoppedAsync(device); }
-            finally { replacingDeviceRepl = false; }
+            await WaitStoppedAsync(device);
             cancellation.Token.ThrowIfCancellationRequested();
             deviceRepl = false; selectedPort = port; SelectChannel(3); Notice.IsOpen = false;
             string directory = Path.Combine(store.DirectoryPath, "devices", "port-" + port);
@@ -74,7 +71,7 @@ public sealed partial class MainWindow
             if (code != 0)
             {
                 string detail = output.ToString().Trim();
-                if (detail.Length == 0) detail = $"进程退出，代码 {code} (0x{unchecked((uint)code):X8})。";
+                detail = $"{ExitReason(code)}，退出代码 {code} (0x{unchecked((uint)code):X8})。" + (detail.Length == 0 ? "" : "\n" + detail);
                 DeviceLog("error " + detail);
                 throw new IOException("mpremote 执行失败：" + detail);
             }

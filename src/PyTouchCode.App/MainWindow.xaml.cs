@@ -132,11 +132,23 @@ public sealed partial class MainWindow : Window
     }
     void Notify(string message, bool error = false) { Notice.Message = message; Notice.Severity = error ? InfoBarSeverity.Error : InfoBarSeverity.Informational; Notice.IsOpen = true; }
     void UpdateInterpreter() => ViewModel.InterpreterLabel = settings.ExecutionTarget == "MicroPython" ? "MicroPython / Pyboard " + settings.DevicePort : File.Exists(settings.Interpreter) ? "Python " + settings.Interpreter : "选择解释器…";
+    static string ExitReason(int code) => code switch
+    {
+        -1 => "进程被终止",
+        -1073741515 => "运行环境缺少 DLL",
+        -1073741510 => "运行被中断",
+        1 => "程序或命令未成功完成",
+        _ => "请查看上方错误输出"
+    };
     void ConnectOutput(ProcessSession session, int channel)
     {
         session.Output += (text, error) => QueueOutput(channel, text);
-        session.Exited += code => QueueOutput(channel, channel == 3 && (deviceStopping || replacingDeviceRepl || deviceCommand?.IsCancellationRequested == true)
-            ? "\n[设备会话已停止]\n" : $"\n[进程退出，代码 {code}]\n");
+        session.Exited += code =>
+        {
+            bool stopped = session.StopRequested || (channel == 3 && (deviceStopping || deviceCommand?.IsCancellationRequested == true));
+            string result = stopped ? "已停止" : code == 0 ? "运行成功" : "运行失败：" + ExitReason(code);
+            QueueOutput(channel, $"\n[{result}，退出代码 {code}]\n");
+        };
     }
     void QueueOutput(int channel, string text)
     {

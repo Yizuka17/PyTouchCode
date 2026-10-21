@@ -374,6 +374,15 @@ public sealed partial class MainWindow
         {
             tab.Control.Editor.SetText("print('UI-SMOKE-42')\n"); await RunFileAsync(false); FlushOutput();
             Assert(consoles[0].Editor.GetText(consoles[0].Editor.Length + 1).Contains("UI-SMOKE-42"), "Script output did not reach editor console");
+            Assert(consoles[0].Editor.GetText(consoles[0].Editor.Length + 1).Contains("运行成功，退出代码 0"), "Successful exit has no readable result");
+            ClearTerminal(0); tab.Control.Editor.SetText("raise RuntimeError('UI_EXPECTED_FAILURE')\n");
+            await RunFileAsync(false); FlushOutput();
+            Assert(consoles[0].Editor.GetText(consoles[0].Editor.Length + 1).Contains("运行失败：程序或命令未成功完成，退出代码 1"), "Failed exit has no explanation");
+            ClearTerminal(0); tab.Control.Editor.SetText("import time\ntime.sleep(60)\n");
+            Task stopping = RunFileAsync(false); await Wait(() => runner.IsRunning);
+            await ExecuteAsync("stop"); await stopping; FlushOutput();
+            string stopped = consoles[0].Editor.GetText(consoles[0].Editor.Length + 1);
+            Assert(stopped.Contains("已停止，退出代码 -1") && !stopped.Contains("运行失败"), "User stop was reported as failure");
         });
         await Test("inline terminal protects history and preserves pending Unicode input", () =>
         {
@@ -640,7 +649,8 @@ public sealed partial class MainWindow
                     SelectChannel(1); // Stop must follow the device task, not the visible console.
                     await ExecuteAsync("stop"); await Cancelled(continuousRun);
                     FlushOutput();
-                    Assert(!Notice.IsOpen && !consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains("代码 -1"), "Intentional stop appeared as an mpremote failure");
+                    string stoppedOutput = consoles[3].Editor.GetText(consoles[3].Editor.Length + 1);
+                    Assert(!Notice.IsOpen && stoppedOutput.Contains("已停止，退出代码 -1") && !stoppedOutput.Contains("运行失败"), "Intentional stop appeared as an mpremote failure");
                     ClearTerminal(3);
                     Task rerun = ExecuteAsync("rerun");
                     await Wait(() => { FlushOutput(); return consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains("PTC_CONTINUOUS_READY"); });
@@ -653,7 +663,7 @@ public sealed partial class MainWindow
                     await Wait(() => device.IsRunning); await Task.Delay(700);
                     device.Stop(); // Simulate an unexpected host process loss.
                     try { await lostProcess.WaitAsync(TimeSpan.FromSeconds(10)); throw new InvalidOperationException("Unexpected process exit was ignored"); }
-                    catch (IOException e) { Assert(e.Message.Contains("代码 -1") && e.Message.Contains("0xFFFFFFFF"), "Empty process failure still has no exit details"); }
+                    catch (IOException e) { Assert(e.Message.Contains("进程被终止") && e.Message.Contains("代码 -1") && e.Message.Contains("0xFFFFFFFF"), "Empty process failure still has no exit explanation"); }
                     await InterruptDeviceAsync(); await StopDeviceAsync();
                     try { await MpRemoteAsync(port, "exec", "raise RuntimeError('PTC_EXPECTED_FAILURE')"); throw new InvalidOperationException("Device exception was ignored"); }
                     catch (IOException e) { Assert(e.Message.Contains("PTC_EXPECTED_FAILURE"), "Device exception details were lost"); }

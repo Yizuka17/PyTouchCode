@@ -17,8 +17,10 @@ public sealed class ProcessSession : IAsyncDisposable
     private Process? process;
     private readonly object state = new();
     private bool disposed;
+    private bool stopRequested;
     private readonly SemaphoreSlim gate = new(1, 1);
     public bool IsRunning { get { lock (state) return process is { HasExited: false }; } }
+    public bool StopRequested { get { lock (state) return stopRequested; } }
     public event Action<string, bool>? Output;
     public event Action<int>? Exited;
     public static ProcessStartInfo CreateStartInfo(string executable, IEnumerable<string> arguments, string directory, IDictionary<string, string>? environment = null)
@@ -40,7 +42,7 @@ public sealed class ProcessSession : IAsyncDisposable
             ObjectDisposedException.ThrowIf(disposed, this);
             current = new Process { StartInfo = CreateStartInfo(executable, arguments, directory, environment) };
             current.Start();
-            lock (state) process = current;
+            lock (state) { stopRequested = false; process = current; }
             using var registration = cancellationToken.Register(Stop);
             var stdout = PumpAsync(current.StandardOutput, false);
             var stderr = PumpAsync(current.StandardError, true);
@@ -74,7 +76,7 @@ public sealed class ProcessSession : IAsyncDisposable
     }
     public void Stop()
     {
-        lock (state) { try { if (process is { HasExited: false }) process.Kill(true); } catch (InvalidOperationException) { } }
+        lock (state) { try { if (process is { HasExited: false }) { stopRequested = true; process.Kill(true); } } catch (InvalidOperationException) { } }
     }
     public async Task StopAsync() { Stop(); await gate.WaitAsync(); gate.Release(); }
     public async ValueTask DisposeAsync() { Stop(); await gate.WaitAsync(); disposed = true; gate.Release(); }
