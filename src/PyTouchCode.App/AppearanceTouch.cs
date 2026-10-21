@@ -111,7 +111,8 @@ public sealed partial class MainWindow
     static long TouchPosition(EditorBaseControl control, Point point)
     {
         double scale = control.XamlRoot?.RasterizationScale ?? 1;
-        long position = control.Editor.PositionFromPoint((int)(point.X * scale), (int)(point.Y * scale));
+        long margin = Enumerable.Range(0, 5).Sum(i => S(control, 2243, (ulong)i));
+        long position = control.Editor.PositionFromPoint((int)Math.Max(margin + 1, point.X * scale), (int)(point.Y * scale));
         return position < 0 ? control.Editor.CurrentPos : Math.Clamp(position, 0, control.Editor.Length);
     }
     static void PanTouch(EditorBaseControl control, long selectionAnchor, long caret, long firstLine, long xOffset, double dx, double dy)
@@ -122,15 +123,77 @@ public sealed partial class MainWindow
         S(control, 2613, (ulong)Math.Max(0, firstLine - (long)(dy * scale / Math.Max(1, ed.TextHeight(0)))));
         ed.XOffset = (int)Math.Clamp(xOffset - (long)(dx * scale), 0, int.MaxValue);
     }
+    sealed class TouchInputGate
+    {
+        public FrameworkElement? Surface;
+        public required Action<uint, Point> Press, Move;
+        public required Action<uint> Release, Cancel;
+    }
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<EditorBaseControl, TouchInputGate> touchInputs = new();
+    static FrameworkElement? EditorInputSurface(DependencyObject parent)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is FrameworkElement { Name: "ImageTarget" } surface) return surface;
+            if (EditorInputSurface(child) is { } found) return found;
+        }
+        return null;
+    }
+    void CommitTouchTap(EditorBaseControl control, Point point, long position, Action? selectionChanged)
+    {
+        double x = point.X * (control.XamlRoot?.RasterizationScale ?? 1);
+        long edge = 0;
+        for (int margin = 0; margin < 5; margin++)
+        {
+            edge += S(control, 2243, (ulong)margin);
+            if (x >= edge) continue;
+            long line = control.Editor.LineFromPosition(position);
+            if (margin == 1 && documents.FirstOrDefault(t => t.Control == control) is { } tab)
+                _ = SafeAsync(() => ToggleBreakpointAsync(tab, (int)line));
+            else if (margin == 2) control.Editor.ToggleFold(line);
+            return;
+        }
+        control.Editor.SetEmptySelection(position); control.Editor.ScrollCaret();
+        control.Focus(FocusState.Pointer);
+        selectionChanged?.Invoke();
+    }
     void AttachTouch(EditorBaseControl control, Action? selectionChanged = null)
     {
         var pointers = new Dictionary<uint, Point>();
+        control.GettingFocus += (_, e) =>
+        {
+            if (pointers.Count > 0 && e.FocusState == FocusState.Pointer)
+            {
+                e.Cancel = true; e.Handled = true;
+            }
+        };
         Point origin = default, previous = default;
+        Point multiOrigin = default;
         long anchor = 0, firstLine = 0, originalAnchor = 0, originalCaret = 0, xOffset = 0;
         string direction = "";
         double distance = 0, initialFont = 0, velocity = 0;
+        bool zooming = false;
         DateTime lastMove = DateTime.UtcNow;
         var inertia = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        var multiFrame = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        void MultiMove()
+        {
+            multiFrame.Stop();
+            if (pointers.Count != 2) return;
+            var values = pointers.Values.ToArray();
+            double current = Math.Sqrt(Math.Pow(values[0].X - values[1].X, 2) + Math.Pow(values[0].Y - values[1].Y, 2));
+            var center = new Point((values[0].X + values[1].X) / 2, (values[0].Y + values[1].Y) / 2);
+            if (Math.Abs(current - distance) / distance > .05) zooming = true;
+            if (zooming)
+            {
+                double size = Math.Clamp(initialFont * current / distance, 9, consoles.Contains(control) ? 32 : 40);
+                for (int style = 0; style <= 39; style++) control.Editor.StyleSetSizeFractional(style, (int)(size * 100));
+                if (consoles.Contains(control)) settings.TerminalFontSize = size; else settings.EditorFontSize = size;
+            }
+            PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, center.X - multiOrigin.X, center.Y - multiOrigin.Y);
+        }
+        multiFrame.Tick += (_, _) => MultiMove();
         double remainder = 0;
         var hold = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
         hold.Tick += (_, _) =>
@@ -154,14 +217,9 @@ public sealed partial class MainWindow
             if (lines != 0) { control.Editor.LineScroll(0, lines); remainder -= lines * height; }
             velocity *= .91;
         };
-        control.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+        void Press(uint id, Point point)
         {
-            if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch) return;
-            Point point = e.GetCurrentPoint(control).Position;
-            double scale = control.XamlRoot?.RasterizationScale ?? 1;
-            long margin = Enumerable.Range(0, 5).Sum(i => S(control, 2243, (ulong)i));
-            if (point.X < margin / scale || point.X > control.ActualWidth - 20 || point.Y > control.ActualHeight - 20) return;
-            inertia.Stop(); pointers[e.Pointer.PointerId] = point; hold.Stop();
+            inertia.Stop(); pointers[id] = point; hold.Stop();
             if (pointers.Count == 1)
             {
                 origin = previous = point; direction = ""; velocity = remainder = 0; lastMove = DateTime.UtcNow;
@@ -172,51 +230,89 @@ public sealed partial class MainWindow
             else if (pointers.Count == 2)
             {
                 var values = pointers.Values.ToArray(); distance = Math.Max(1, Math.Sqrt(Math.Pow(values[0].X - values[1].X, 2) + Math.Pow(values[0].Y - values[1].Y, 2)));
-                initialFont = consoles.Contains(control) ? settings.TerminalFontSize : settings.EditorFontSize; direction = "pinch";
+                multiOrigin = new Point((values[0].X + values[1].X) / 2, (values[0].Y + values[1].Y) / 2);
+                firstLine = control.Editor.FirstVisibleLine; xOffset = control.Editor.XOffset;
+                PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, 0, 0);
+                initialFont = consoles.Contains(control) ? settings.TerminalFontSize : settings.EditorFontSize; direction = "multi"; zooming = false;
             }
-            control.CapturePointer(e.Pointer); e.Handled = true;
-        }), true);
-        control.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler((_, e) =>
+            else if (pointers.Count > 2) { multiFrame.Stop(); direction = "multi"; }
+        }
+        void Move(uint id, Point point)
         {
-            if (!pointers.ContainsKey(e.Pointer.PointerId)) return;
-            Point point = e.GetCurrentPoint(control).Position; pointers[e.Pointer.PointerId] = point;
+            if (!pointers.ContainsKey(id)) return;
+            if (pointers[id].Equals(point)) return;
+            pointers[id] = point;
             if (pointers.Count == 2)
             {
-                var values = pointers.Values.ToArray(); double current = Math.Sqrt(Math.Pow(values[0].X - values[1].X, 2) + Math.Pow(values[0].Y - values[1].Y, 2));
-                double size = Math.Clamp(initialFont * current / distance, 9, consoles.Contains(control) ? 32 : 40);
-                control.Editor.StyleSetSizeFractional(32, (int)(size * 100));
-                // Apply to all token styles, otherwise highlighted words retain their old size.
-                for (int style = 0; style <= 39; style++) control.Editor.StyleSetSizeFractional(style, (int)(size * 100));
-                if (consoles.Contains(control)) settings.TerminalFontSize = Math.Clamp(size, 9, 32); else settings.EditorFontSize = size;
-                e.Handled = true; return;
+                // Pointer updates arrive one finger at a time. Evaluate both
+                // contacts in one frame so parallel movement cannot look like a pinch.
+                if (!multiFrame.IsEnabled) multiFrame.Start();
+                return;
             }
-            if (direction == "pinch") { e.Handled = true; return; }
+            if (direction == "multi") return;
             double dx = point.X - origin.X, dy = point.Y - origin.Y;
-            if (direction.Length == 0 && Math.Sqrt(dx * dx + dy * dy) >= 8) { direction = "scroll"; hold.Stop(); }
+            if (direction.Length == 0 && Math.Sqrt(dx * dx + dy * dy) >= 8) { direction = Math.Abs(dx) > Math.Abs(dy) * 1.25 ? "select" : "scroll"; hold.Stop(); }
             double scale = control.XamlRoot.RasterizationScale;
             if (direction == "scroll")
             {
-                PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, dx, dy);
+                PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, 0, dy);
                 double milliseconds = Math.Max(1, (DateTime.UtcNow - lastMove).TotalMilliseconds);
                 velocity = (previous.Y - point.Y) * scale * 16 / milliseconds;
             }
-            previous = point; lastMove = DateTime.UtcNow; e.Handled = true;
-        }), true);
-        control.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) =>
+            else if (direction == "select")
+            {
+                control.Editor.SetSel(anchor, TouchPosition(control, point));
+                S(control, 2613, (ulong)firstLine); control.Editor.XOffset = (int)xOffset;
+                selectionChanged?.Invoke();
+            }
+            previous = point; lastMove = DateTime.UtcNow;
+        }
+        void Release(uint id)
         {
-            if (!pointers.Remove(e.Pointer.PointerId)) return; hold.Stop();
-            control.ReleasePointerCapture(e.Pointer);
+            if (pointers.Count == 2) MultiMove();
+            if (!pointers.Remove(id)) return; hold.Stop();
             if (pointers.Count == 0)
             {
-                if (direction.Length == 0) { control.Editor.SetEmptySelection(anchor); control.Editor.ScrollCaret(); selectionChanged?.Invoke(); }
-                if (direction == "scroll") PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, previous.X - origin.X, previous.Y - origin.Y);
+                if (direction.Length == 0) CommitTouchTap(control, origin, anchor, selectionChanged);
+                if (direction == "scroll") PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, 0, previous.Y - origin.Y);
                 if (direction == "scroll" && new Windows.UI.ViewManagement.UISettings().AnimationsEnabled) inertia.Start();
-                if (direction == "pinch") _ = SafeAsync(async () => { ApplyAppearance(); await store.SaveAsync(settings); });
+                if (direction == "multi" && zooming) _ = SafeAsync(async () => { ApplyAppearance(); await store.SaveAsync(settings); });
             }
-            e.Handled = true;
-        }), true);
-        control.PointerCanceled += (_, e) => { pointers.Remove(e.Pointer.PointerId); hold.Stop(); inertia.Stop(); };
-        control.Unloaded += (_, _) => { hold.Stop(); inertia.Stop(); pointers.Clear(); };
+        }
+        void Cancel(uint id) { if (!pointers.Remove(id)) return; hold.Stop(); inertia.Stop(); multiFrame.Stop(); direction = "multi"; }
+        var gate = new TouchInputGate { Press = Press, Move = Move, Release = Release, Cancel = Cancel };
+        touchInputs.Add(control, gate);
+        void BindSurface()
+        {
+            // EditorBaseControl.OnPointerPressed focuses and changes the caret
+            // before handlers on the control run. Consume touch on its rendering
+            // child so the event never reaches that native class handler.
+            if (EditorInputSurface(control) is not { } surface || ReferenceEquals(gate.Surface, surface)) return;
+            gate.Surface = surface; surface.IsHoldingEnabled = false;
+            surface.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+            {
+                if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch) return;
+                gate.Press(e.Pointer.PointerId, e.GetCurrentPoint(control).Position);
+                surface.CapturePointer(e.Pointer); e.Handled = true;
+            }), true);
+            surface.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler((_, e) =>
+            {
+                if (!pointers.ContainsKey(e.Pointer.PointerId)) return;
+                gate.Move(e.Pointer.PointerId, e.GetCurrentPoint(control).Position); e.Handled = true;
+            }), true);
+            surface.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) =>
+            {
+                if (!pointers.ContainsKey(e.Pointer.PointerId)) return;
+                gate.Move(e.Pointer.PointerId, e.GetCurrentPoint(control).Position);
+                gate.Release(e.Pointer.PointerId); surface.ReleasePointerCapture(e.Pointer); e.Handled = true;
+            }), true);
+            surface.PointerCanceled += (_, e) => gate.Cancel(e.Pointer.PointerId);
+            surface.PointerCaptureLost += (_, e) => gate.Cancel(e.Pointer.PointerId);
+        }
+        control.Loaded += (_, _) => BindSurface();
+        control.LayoutUpdated += (_, _) => { if (gate.Surface is null || !gate.Surface.IsLoaded) BindSurface(); };
+        if (control.IsLoaded) BindSurface();
+        control.Unloaded += (_, _) => { hold.Stop(); inertia.Stop(); multiFrame.Stop(); pointers.Clear(); };
     }
 }
 

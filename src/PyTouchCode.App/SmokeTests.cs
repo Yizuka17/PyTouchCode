@@ -351,6 +351,97 @@ public sealed partial class MainWindow
             Assert(ed.Anchor == originalAnchor && ed.CurrentPos == caret, "A diagonal swipe selected text");
             ed.SetEmptySelection(0); ed.ScrollCaret();
         });
+        await Test("touch rendering surface defers editor and terminal focus until a confirmed tap", async () =>
+        {
+            SelectChannel(0);
+            bool originalWrap = settings.WordWrap;
+            double originalEditorFont = settings.EditorFontSize, originalTerminalFont = settings.TerminalFontSize;
+            settings.WordWrap = false; ApplyAppearance();
+            try
+            {
+            foreach (var control in new[] { tab.Control, consoles[0] })
+            {
+                IEnumerable<string> Describe(DependencyObject node)
+                {
+                    yield return node is FrameworkElement f ? $"{node.GetType().Name} name={f.Name} loaded={f.IsLoaded} size={f.ActualWidth}x{f.ActualHeight}" : node.GetType().Name;
+                    for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                        foreach (string child in Describe(VisualTreeHelper.GetChild(node, i))) yield return "  " + child;
+                }
+                await File.WriteAllLinesAsync(Path.Combine(directory, control == tab.Control ? "touch-editor-tree.txt" : "touch-terminal-tree.txt"), Describe(control));
+                await Wait(() => control.IsLoaded && control.ActualHeight > 100 && touchInputs.TryGetValue(control, out var input) && input.Surface is not null);
+                var gate = touchInputs.GetValue(control, _ => throw new InvalidOperationException("Touch gate missing"));
+                Assert(gate.Surface is { Name: "ImageTarget", IsHoldingEnabled: false } && !ReferenceEquals(gate.Surface, control), "Touch is still intercepted after the native editor's focus handler");
+                var ed = control.Editor;
+                if (control == consoles[0]) { ClearTerminal(0); AppendTerminalOutput(0, string.Concat(Enumerable.Range(0, 200).Select(n => $"output {n} {new string('x', 200)}\n"))); }
+                else ed.SetText(string.Concat(Enumerable.Range(0, 200).Select(n => $"line {n} {new string('x', 200)}\n")));
+                ed.SetSel(0, 0); ed.ScrollCaret();
+                Assert(RunButton.Focus(FocusState.Programmatic), "Unable to move focus outside editor");
+                var origin = new Windows.Foundation.Point(120, Math.Min(220, control.ActualHeight - 25));
+                long caret = ed.CurrentPos, anchor = ed.Anchor, first = ed.FirstVisibleLine;
+                gate.Press(1, origin);
+                control.Focus(FocusState.Pointer); // Native pointer focus must be rejected before TSF sees it.
+                Assert(ed.CurrentPos == caret && ed.Anchor == anchor && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Touch down moved the caret or acquired text focus");
+                gate.Move(1, new Windows.Foundation.Point(origin.X, origin.Y - 100));
+                gate.Release(1);
+                Assert(ed.FirstVisibleLine > first && ed.CurrentPos == caret && ed.Anchor == anchor, "Swipe failed to scroll or moved the caret");
+                Assert(ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Swipe acquired text focus and could summon the keyboard");
+                gate.Press(2, origin); gate.Cancel(2); gate.Release(2); // Also stops inertia.
+                Assert(ed.CurrentPos == caret && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Cancelled touch became a tap");
+                long expected = TouchPosition(control, origin);
+                gate.Press(3, origin); gate.Move(3, new Windows.Foundation.Point(origin.X + 1, origin.Y + 1)); gate.Release(3);
+                Assert(ed.CurrentPos == expected && control.FocusState == FocusState.Pointer, "Confirmed tap did not position the caret and enable text input");
+                Assert(RunButton.Focus(FocusState.Programmatic), "Unable to move focus before horizontal selection");
+                long horizontalOffset = ed.XOffset, verticalOffset = ed.FirstVisibleLine;
+                gate.Press(4, origin); gate.Move(4, new Windows.Foundation.Point(origin.X + 90, origin.Y + 2)); gate.Release(4);
+                Assert(ed.SelectionStart != ed.SelectionEnd && ed.XOffset == horizontalOffset && ed.FirstVisibleLine == verticalOffset, "Horizontal drag did not select text or scrolled the viewport");
+                ed.SetSel(10, 20); long selectedAnchor = ed.Anchor, selectedCaret = ed.CurrentPos;
+                double font = control == consoles[0] ? settings.TerminalFontSize : settings.EditorFontSize;
+                long startX = ed.XOffset, startY = ed.FirstVisibleLine;
+                var other = new Windows.Foundation.Point(origin.X + 100, origin.Y);
+                gate.Press(5, origin); gate.Press(6, other);
+                gate.Move(5, new Windows.Foundation.Point(origin.X - 40, origin.Y - 60)); gate.Move(6, new Windows.Foundation.Point(other.X - 40, other.Y - 60));
+                await Task.Delay(40); gate.Release(5);
+                gate.Move(6, new Windows.Foundation.Point(other.X + 50, other.Y)); gate.Release(6);
+                Assert(ed.XOffset > startX && ed.FirstVisibleLine > startY && ed.Anchor == selectedAnchor && ed.CurrentPos == selectedCaret, "Two-finger pan failed or changed selection");
+                Assert((control == consoles[0] ? settings.TerminalFontSize : settings.EditorFontSize) == font, "Parallel finger motion changed font size");
+                gate.Press(7, origin); gate.Move(7, new Windows.Foundation.Point(origin.X + 30, origin.Y));
+                gate.Press(8, other);
+                gate.Move(7, new Windows.Foundation.Point(origin.X - 20, origin.Y)); gate.Move(8, new Windows.Foundation.Point(other.X + 20, other.Y));
+                await Task.Delay(40); gate.Release(7); gate.Release(8);
+                Assert(ed.Anchor == selectedAnchor && ed.CurrentPos == selectedCaret, "Pinch retained the first finger's transient text selection");
+                Assert((control == consoles[0] ? settings.TerminalFontSize : settings.EditorFontSize) > font && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Pinch failed to zoom or acquired text focus");
+                if (control == consoles[0]) settings.TerminalFontSize = font; else settings.EditorFontSize = font;
+                ApplyAppearance();
+                await Wait(() => ed.ScrollWidth > control.ActualWidth * control.XamlRoot.RasterizationScale);
+                Assert(ed.HScrollBar && (int)ed.WrapMode == 0, "Long lines do not have a horizontal scrollbar");
+            }
+            }
+            finally
+            {
+                settings.WordWrap = originalWrap; settings.EditorFontSize = originalEditorFont; settings.TerminalFontSize = originalTerminalFont; ApplyAppearance();
+                ClearTerminal(0);
+                foreach (var control in new[] { tab.Control, consoles[0] }) { control.Editor.SetEmptySelection(0); control.Editor.XOffset = 0; S(control, 2613, 0); }
+            }
+        });
+        await Test("folding uses chevrons on headers and vertical scope lines", async () =>
+        {
+            var ed = tab.Control.Editor;
+            ed.SetText("def outer():\n    if True:\n        print('hello')\n    return 1\n\nprint(outer())\n"); ed.Colourise(0, -1);
+            await Task.Delay(50);
+            Assert(new[] { 25, 26, 30, 31 }.All(n => (int)ed.MarkerSymbolDefined(n) == 30), "A fold header still uses a plus/minus box");
+            Assert(new[] { 27, 28, 29 }.All(n => (int)ed.MarkerSymbolDefined(n) == 9), "Fold scope lines contain repeated symbols");
+            ed.SetEmptySelection(0); ed.ScrollCaret();
+            RunButton.Focus(FocusState.Programmatic);
+            double scale = tab.Control.XamlRoot.RasterizationScale;
+            var point = new Windows.Foundation.Point((S(tab.Control, 2243, 0) + S(tab.Control, 2243, 1) + S(tab.Control, 2243, 2) / 2.0) / scale, ed.TextHeight(0) / scale / 2);
+            var gate = touchInputs.GetValue(tab.Control, _ => throw new InvalidOperationException("Touch gate missing"));
+            gate.Press(30, point); gate.Release(30);
+            Assert(!ed.GetFoldExpanded(0) && !ed.GetLineVisible(1), "Chevron tap did not collapse the scope");
+            gate.Press(31, point); gate.Release(31);
+            Assert(ed.GetFoldExpanded(0) && ed.GetLineVisible(1), "Chevron tap did not expand the scope");
+            Assert(ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Folding acquired text focus");
+            await Snapshot(tab.View, "fold-chevrons.png");
+        });
         await Test("breakpoints track inserted lines", async () =>
         {
             var ed = tab.Control.Editor; ed.SetText("x = 1\nprint(x)\n"); await ToggleBreakpointAsync(tab, 1);
