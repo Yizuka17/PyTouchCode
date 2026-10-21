@@ -1,19 +1,19 @@
 # 验收记录
 
-版本 0.1.5.9。验证日期 2026-10-21，Windows 10 19045 x64，200% 缩放。
+版本 0.1.5.10。验证日期 2026-10-21，Windows 10 19045 x64，200% 缩放。
 
 | 项目 | 结果 | 记录 |
 | --- | --- | --- |
-| Release x64 构建 | 0 warning，0 error | `artifacts/revision-0159-package.log` |
-| 核心测试 | 28 项通过 | `artifacts/revision-0159-build.log` |
-| 便携版应用 | 39 项通过 | `artifacts/revision-0159-portable.log` |
-| MSIX 升级、默认缓存及应用 | 39 项通过 | `artifacts/revision-0159-msix.log` |
+| Release x64 构建 | 0 warning，0 error | `artifacts/revision-01510-package.log` |
+| 核心测试（0.1.5.9，核心代码未变） | 28 项通过 | `artifacts/revision-0159-build.log` |
+| 便携版应用 | 39 项通过 | `artifacts/revision-01510-portable.log` |
+| MSIX 升级、默认缓存及应用 | 39 项通过 | `artifacts/revision-01510-msix.log` |
 
 编辑器和终端在手势期间暂停原生输入会话，点按或键盘输入时恢复。新增已聚焦编辑器及跨窗格滚动验证：直接查询当前 UI 线程的 TSF 文档，确认滑动期间无激活输入文档，恢复输入后重新绑定。窗口另在手势期间及结束后短时间阻止延迟出现的触摸键盘；普通输入框不受此限制。保留纵向滚动、横向选字、双指平移及缩放回归测试。尚未进行 Surface 实体触摸验证。
 
 折叠箭头和范围竖线改为跟随代码缩进绘制，嵌套作用域分别定位。已验证折叠/展开、编辑后的行号更新、水平滚动跟随及真实渲染图，原生固定列标记已隐藏。
 
-应用图标移除底色，PNG 与 ICO 均保留透明通道；ICO 包含 16 至 256 像素的七个尺寸，窗口和安装包共用线条图案。已检查 PNG 和 ICO 的透明背景，并验证安装包使用更新后的资源。
+应用图标移除底色，PNG 与 ICO 均保留透明通道；ICO 包含 16 至 256 像素的七个尺寸。0.1.5.10 补齐 Windows Shell 使用的 14 种 targetsize 及 unplated、lightunplated 变体，避免系统为透明图片补主题色底板。浅色变体使用深色斜线。已检查透明像素、安装包中的实际文件及 PRI 的 TargetSize/AlternateForm 索引。系统窗口截图连续超时，未复核开始菜单和任务栏的最终观感。
 
 此前 0.1.5.7 已通过 COM5 实机测试，板卡为 PYBv1.1_CN / STM32F405RG，MicroPython 1.18。测试包含 H: 盘 main.py 首次运行、持续执行、停止重跑、异常详情及 REPL 输入得到 42，测试前后 boot.py、main.py 的 SHA256 相同。本次触摸修复验证期间板卡未连接，未重复硬件测试。
 
