@@ -65,7 +65,6 @@ public sealed partial class MainWindow : Window
         {
             if (closing) return;
             args.Cancel = true;
-            if (!ready) return;
             await SafeAsync(CloseWorkspaceAsync);
         };
         AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control, "new"); AddShortcut(VirtualKey.O, VirtualKeyModifiers.Control, "open");

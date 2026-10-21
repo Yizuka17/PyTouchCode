@@ -41,9 +41,9 @@ public sealed partial class MainWindow
         closePending = true;
         try
         {
-            if (!sessionAvailable) foreach (var tab in documents.ToArray()) if (!await ConfirmSaveAsync(tab)) return;
+            if (!ready || !sessionAvailable) foreach (var tab in documents.ToArray()) if (!await ConfirmSaveAsync(tab)) return;
             Root.IsHitTestVisible = false; RunButton.Focus(FocusState.Programmatic);
-            sessionTimer.Stop(); await SaveSessionAsync(); await store.SaveAsync(settings);
+            sessionTimer.Stop(); await SaveSessionAsync(); if (ready) await store.SaveAsync(settings);
             runner.Stop(); shell.Stop(); repl.Stop(); maintenance.Stop(); await StopDeviceAsync();
             if (debugger is not null) await debugger.DisposeAsync();
             language.Stop(); closing = true; Close();
