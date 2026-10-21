@@ -9,6 +9,15 @@ namespace PyTouchCode.App;
 public sealed partial class MainWindow
 {
     bool deviceRepl;
+    readonly SemaphoreSlim deviceOperations = new(1, 1);
+    CancellationTokenSource? deviceCommand;
+    bool deviceStopping;
+    bool replacingDeviceRepl;
+    void DeviceLog(string message)
+    {
+        try { File.AppendAllText(Path.Combine(store.DirectoryPath, "device.log"), $"{DateTimeOffset.Now:O} {message}\n"); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
     string DevicePython => File.Exists(bundled) ? bundled! : settings.Interpreter;
     static async Task WaitStoppedAsync(ProcessSession session)
     {
@@ -16,30 +25,112 @@ public sealed partial class MainWindow
     }
     async Task<string> MpRemoteAsync(string port, params string[] args)
     {
-        await WaitStoppedAsync(device); deviceRepl = false; selectedPort = port; SelectChannel(3);
+        port = SerialDevices.ValidatePort(port);
+        if (deviceStopping || !await deviceOperations.WaitAsync(0)) throw new InvalidOperationException("设备正在执行任务，请先停止。");
+        using var cancellation = new CancellationTokenSource();
+        deviceCommand = cancellation;
         var output = new StringBuilder();
-        void Capture(string text, bool error) { output.Append(text); }
+        bool runningFile = args.Length == 2 && args[0] == "run";
+        void Capture(string text, bool error)
+        {
+            lock (output)
+            {
+                output.Append(text);
+                // A board program can stream output indefinitely; keep a
+                // bounded error tail instead of retaining its entire lifetime.
+                if (runningFile && output.Length > 262144) output.Remove(0, output.Length - 262144);
+            }
+        }
+        string? snapshot = null;
         device.Output += Capture;
         try
         {
-            int code = await device.RunAsync(DevicePython, new[] { "-u", "-m", "mpremote", "connect", port }.Concat(args), WorkingDirectory);
-            if (code != 0) throw new IOException("mpremote 执行失败：" + output);
+            // Only the idle REPL may be replaced automatically. A second Run
+            // must never kill the command that is already executing.
+            if (device.IsRunning && !deviceRepl) throw new InvalidOperationException("设备正在执行任务，请先停止。");
+            replacingDeviceRepl = deviceRepl;
+            try { await WaitStoppedAsync(device); }
+            finally { replacingDeviceRepl = false; }
+            cancellation.Token.ThrowIfCancellationRequested();
+            deviceRepl = false; selectedPort = port; SelectChannel(3); Notice.IsOpen = false;
+            string directory = Path.Combine(store.DirectoryPath, "devices", "port-" + port);
+            Directory.CreateDirectory(directory);
+            string name = runningFile ? Path.GetFileName(args[1]) : "设备操作";
+            if (runningFile)
+            {
+                // mpremote resets the board before opening the host script.
+                // A script on the board's USB disk must be read before reset.
+                snapshot = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".py");
+                File.Copy(args[1], snapshot);
+                args = ["run", snapshot];
+                ViewModel.IsRunning = true;
+                QueueOutput(3, $"\n运行 {name} ({port})\n");
+            }
+            ViewModel.SessionStatus = runningFile ? $"正在运行 {name} ({port})" : $"正在访问 {port}";
+            DeviceLog($"start {port} {args[0]} {name}");
+            int code = await device.RunAsync(DevicePython, new[] { "-u", "-m", "mpremote", "connect", port }.Concat(args), directory, cancellationToken: cancellation.Token);
+            DeviceLog($"exit {port} code={code} stopped={cancellation.IsCancellationRequested}");
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (code != 0)
+            {
+                string detail = output.ToString().Trim();
+                if (detail.Length == 0) detail = $"进程退出，代码 {code} (0x{unchecked((uint)code):X8})。";
+                DeviceLog("error " + detail);
+                throw new IOException("mpremote 执行失败：" + detail);
+            }
             return output.ToString();
         }
-        finally { device.Output -= Capture; }
+        finally
+        {
+            device.Output -= Capture; deviceCommand = null;
+            if (snapshot is not null)
+                try { File.Delete(snapshot); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            if (runningFile) ViewModel.IsRunning = false;
+            ViewModel.SessionStatus = "就绪";
+            deviceOperations.Release();
+        }
     }
     async Task ConnectDeviceAsync(string port)
+    {
+        if (deviceStopping || !await deviceOperations.WaitAsync(0)) throw new InvalidOperationException("设备正在执行任务，请先停止。");
+        try { await StartDeviceReplAsync(port); }
+        finally { deviceOperations.Release(); }
+    }
+    async Task StartDeviceReplAsync(string port)
     {
         if (device.IsRunning) throw new InvalidOperationException("请先断开当前设备会话。");
         selectedPort = SerialDevices.ValidatePort(port); settings.DevicePort = selectedPort; settings.ExecutionTarget = "MicroPython"; UpdateInterpreter();
         await store.SaveAsync(settings); deviceRepl = true; SelectChannel(3);
-        _ = SafeAsync(async () => await device.RunAsync(DevicePython, ["-u", Path.Combine(AppContext.BaseDirectory, "tools", "serial_repl.py"), port], WorkingDirectory));
+        _ = SafeAsync(async () => await device.RunAsync(DevicePython, ["-u", Path.Combine(AppContext.BaseDirectory, "tools", "serial_repl.py"), port], store.DirectoryPath));
     }
     async Task InterruptDeviceAsync()
     {
         if (string.IsNullOrWhiteSpace(selectedPort)) return;
-        if (!deviceRepl || !device.IsRunning) { await device.StopAsync(); await ConnectDeviceAsync(selectedPort); }
-        await device.SendAsync(JsonSerializer.Serialize(new { control = 3 }));
+        await StopDeviceAsync(true);
+    }
+    async Task StopDeviceAsync(bool interrupt = false)
+    {
+        if (deviceStopping) return;
+        deviceStopping = true;
+        try
+        {
+            DeviceLog($"stop {selectedPort} interrupt={interrupt}");
+            deviceCommand?.Cancel();
+            await WaitStoppedAsync(device);
+            await deviceOperations.WaitAsync();
+            try
+            {
+                deviceRepl = false;
+                if (interrupt)
+                {
+                    await StartDeviceReplAsync(selectedPort);
+                    await device.SendAsync(JsonSerializer.Serialize(new { control = 3 }));
+                    ViewModel.SessionStatus = "已停止，设备 REPL";
+                }
+            }
+            finally { deviceOperations.Release(); }
+        }
+        finally { deviceStopping = false; }
     }
     async Task DeviceDialogAsync()
     {
@@ -60,7 +151,7 @@ public sealed partial class MainWindow
         {
             if (operating) return; operating = true;
             try { await action(); }
-            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+            catch (OperationCanceledException) { if (!lifetime.IsCancellationRequested) status.Text = "已停止"; }
             catch (Exception e) { status.Text = e.Message; }
             finally { operating = false; }
         }
@@ -80,7 +171,7 @@ public sealed partial class MainWindow
         }
         scan.Click += async (_, _) => await Work(Scan);
         connect.Click += async (_, _) => await Work(async () => { await ConnectDeviceAsync(Port()); status.Text = "已连接。"; });
-        disconnect.Click += async (_, _) => await Work(async () => { await WaitStoppedAsync(device); status.Text = "已断开"; });
+        disconnect.Click += async (_, _) => await Work(async () => { await StopDeviceAsync(); status.Text = "已断开"; });
         // Interrupt must remain available while a long mpremote task is running.
         interrupt.Click += async (_, _) => { try { await InterruptDeviceAsync(); status.Text = "已发送中断信号"; } catch (Exception e) { status.Text = e.Message; } };
         reboot.Click += async (_, _) => await Work(async () => { if (!deviceRepl || !device.IsRunning) await InterruptDeviceAsync(); await device.SendAsync(JsonSerializer.Serialize(new { control = 4 })); });
@@ -106,7 +197,7 @@ public sealed partial class MainWindow
         download.Click += async (_, _) => await Work(async () =>
         {
             string name = Path.GetFileName(remotePath.Text); if (string.IsNullOrWhiteSpace(name)) throw new InvalidDataException("请指定文件路径。");
-            string directory = Path.Combine(store.DirectoryPath, "devices", Port()); Directory.CreateDirectory(directory);
+            string directory = Path.Combine(store.DirectoryPath, "devices", "port-" + Port()); Directory.CreateDirectory(directory);
             string target = Path.Combine(directory, name);
             // Download to a temporary file so an open local edit cannot be overwritten silently.
             string staging = target + ".download";

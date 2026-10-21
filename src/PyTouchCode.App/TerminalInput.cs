@@ -128,7 +128,7 @@ public sealed partial class MainWindow
         {
             e.Handled = true;
             if (ed.SelectionStart != ed.SelectionEnd) ed.Copy();
-            else if (channel == 3 && deviceRepl) await InterruptDeviceAsync();
+            else if (channel == 3) await InterruptDeviceAsync();
             else { new[] { runner, shell, repl, device }[channel].Stop(); ReplaceTerminalDraft(channel, ""); AppendTerminalOutput(channel, "^C\n"); }
             return;
         }

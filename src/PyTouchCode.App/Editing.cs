@@ -156,6 +156,7 @@ public sealed partial class MainWindow
             long start = ed.PositionFromLine(line), end = ed.GetLineEndPosition(line);
             ed.IndicatorFillRange(start, Math.Max(1, end - start));
         }
+        if (ViewModel.IsRunning || deviceCommand is not null) return;
         if (list.GetArrayLength() > 0) ViewModel.SessionStatus = $"第 {list[0].GetProperty("line")} 行 {list[0].GetProperty("message").GetString()}";
         else if (!runner.IsRunning) ViewModel.SessionStatus = "语法检查通过";
     }

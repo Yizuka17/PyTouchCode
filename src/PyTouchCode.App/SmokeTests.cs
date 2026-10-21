@@ -589,10 +589,11 @@ public sealed partial class MainWindow
         });
         var commandArgs = Environment.GetCommandLineArgs(); int boardIndex = Array.IndexOf(commandArgs, "--pyboard-test");
         if (boardIndex >= 0 && boardIndex + 1 < commandArgs.Length)
-            await Test("physical Pyboard executes RAM code and accepts inline REPL through the profile runtime", async () =>
+            await Test("physical Pyboard first run, continuous execution, stop, rerun, errors and inline REPL", async () =>
             {
                 string port = SerialDevices.ValidatePort(commandArgs[boardIndex + 1]);
-                string? oldBundled = bundled; string oldInterpreter = settings.Interpreter, oldTarget = settings.ExecutionTarget, oldPort = settings.DevicePort;
+                string? oldBundled = bundled; string oldInterpreter = settings.Interpreter, oldTarget = settings.ExecutionTarget, oldPort = settings.DevicePort, oldWorkspace = settings.Workspace;
+                var oldTab = Tabs.SelectedItem;
                 bundled = profilePython ?? await new RuntimeUpdates(AppDataPaths.Directory).EnsureBundledAsync();
                 const string identify = "import os,sys,json,uhashlib,ubinascii;print(json.dumps({'machine':str(os.uname()),'platform':sys.platform,'hashes':{n:ubinascii.hexlify(uhashlib.sha256(open(n,'rb').read()).digest()).decode() for n in ('boot.py','main.py')}}))";
                 try
@@ -600,6 +601,62 @@ public sealed partial class MainWindow
                     string before = (await MpRemoteAsync(port, "resume", "exec", identify)).Trim();
                     using var info = JsonDocument.Parse(before);
                     Assert(info.RootElement.GetProperty("platform").GetString() == "pyboard", "Selected device is not a Pyboard");
+                    settings.ExecutionTarget = "MicroPython"; settings.DevicePort = port;
+                    async Task Cancelled(Task task)
+                    {
+                        try { await task.WaitAsync(TimeSpan.FromSeconds(10)); throw new InvalidOperationException("Stopped task did not report cancellation"); }
+                        catch (OperationCanceledException) { }
+                    }
+                    // Opt-in hardware test: run the user's saved board script
+                    // from its USB volume without saving or changing either file.
+                    string? boardRoot = DriveInfo.GetDrives().Where(d => d.IsReady && d.DriveType == DriveType.Removable)
+                        .Select(d => d.RootDirectory.FullName).FirstOrDefault(d => File.Exists(Path.Combine(d, "pybcdc.inf")) && File.Exists(Path.Combine(d, "main.py")));
+                    bool usbScriptTested = false;
+                    if (boardRoot is not null)
+                    {
+                        settings.Workspace = boardRoot;
+                        await OpenDocumentAsync(Path.Combine(boardRoot, "main.py"));
+                        Notice.IsOpen = false;
+                        Task firstRun = ExecuteAsync("run");
+                        await Wait(() => device.IsRunning && ViewModel.IsRunning);
+                        await Task.Delay(2500);
+                        Assert(!firstRun.IsCompleted && !Notice.IsOpen, "First run of the USB board script failed");
+                        Assert(ViewModel.SessionStatus.StartsWith("正在运行 main.py"), "Device running status is missing");
+                        await ExecuteAsync("stop"); await Cancelled(firstRun);
+                        Assert(!Notice.IsOpen && !ViewModel.IsRunning, "Stopping a board program was reported as an error");
+                        await StopDeviceAsync(); usbScriptTested = true;
+                    }
+                    string continuous = Path.Combine(directory, "pyboard-continuous-probe.py");
+                    await File.WriteAllTextAsync(continuous, "import pyb\nprint('PTC_CONTINUOUS_READY')\nwhile True:\n    pyb.delay(100)\n");
+                    await OpenDocumentAsync(continuous); ClearTerminal(3); Notice.IsOpen = false;
+                    Task continuousRun = ExecuteAsync("run");
+                    await Wait(() => { FlushOutput(); return consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains("PTC_CONTINUOUS_READY"); });
+                    await ExecuteAsync("run");
+                    Assert(!continuousRun.IsCompleted && device.IsRunning && deviceCommand?.IsCancellationRequested == false, "Duplicate Run killed the active program");
+                    await Task.Delay(700);
+                    Notice.IsOpen = false;
+                    ApplyDiagnostics(Active!, JsonSerializer.SerializeToElement(new { diagnostics = Array.Empty<object>() }));
+                    Assert(ViewModel.SessionStatus.StartsWith("正在运行"), "Diagnostics overwrote device running status");
+                    SelectChannel(1); // Stop must follow the device task, not the visible console.
+                    await ExecuteAsync("stop"); await Cancelled(continuousRun);
+                    FlushOutput();
+                    Assert(!Notice.IsOpen && !consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains("代码 -1"), "Intentional stop appeared as an mpremote failure");
+                    ClearTerminal(3);
+                    Task rerun = ExecuteAsync("rerun");
+                    await Wait(() => { FlushOutput(); return consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains("PTC_CONTINUOUS_READY"); });
+                    Assert(!rerun.IsCompleted && ViewModel.IsRunning, "Rerun did not start a persistent program");
+                    await InterruptDeviceAsync(); await Cancelled(rerun); await StopDeviceAsync();
+                    string silent = Path.Combine(directory, "pyboard-silent-probe.py");
+                    await File.WriteAllTextAsync(silent, "import pyb\nwhile True:\n    pyb.delay(100)\n");
+                    await OpenDocumentAsync(silent);
+                    Task lostProcess = ExecuteAsync("run");
+                    await Wait(() => device.IsRunning); await Task.Delay(700);
+                    device.Stop(); // Simulate an unexpected host process loss.
+                    try { await lostProcess.WaitAsync(TimeSpan.FromSeconds(10)); throw new InvalidOperationException("Unexpected process exit was ignored"); }
+                    catch (IOException e) { Assert(e.Message.Contains("代码 -1") && e.Message.Contains("0xFFFFFFFF"), "Empty process failure still has no exit details"); }
+                    await InterruptDeviceAsync(); await StopDeviceAsync();
+                    try { await MpRemoteAsync(port, "exec", "raise RuntimeError('PTC_EXPECTED_FAILURE')"); throw new InvalidOperationException("Device exception was ignored"); }
+                    catch (IOException e) { Assert(e.Message.Contains("PTC_EXPECTED_FAILURE"), "Device exception details were lost"); }
                     string script = Path.Combine(directory, "pyboard-ram-probe.py");
                     await File.WriteAllTextAsync(script, "print('PTC_RAM_PROBE', 6 * 7)\n");
                     string run = await MpRemoteAsync(port, "resume", "run", script);
@@ -610,15 +667,16 @@ public sealed partial class MainWindow
                     ReplaceTerminalDraft(3, "print('PTC_REPL_PROBE', 6 * 7)"); await SubmitTerminalAsync(3);
                     await Wait(() => { FlushOutput(); return consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains("PTC_REPL_PROBE 42"); });
                     string transcript = consoles[3].Editor.GetText(consoles[3].Editor.Length + 1);
-                    await WaitStoppedAsync(device); deviceRepl = false;
+                    await StopDeviceAsync();
                     string after = (await MpRemoteAsync(port, "resume", "exec", identify)).Trim();
                     Assert(before == after, "Board identification or boot.py/main.py hashes changed");
-                    await File.WriteAllTextAsync(Path.Combine(directory, "pyboard-hardware.json"), JsonSerializer.Serialize(new { port, python = bundled, identification = info.RootElement, ram = run, repl = transcript, filesUnchanged = true }, SettingsStore.JsonOptions));
+                    await File.WriteAllTextAsync(Path.Combine(directory, "pyboard-hardware.json"), JsonSerializer.Serialize(new { port, python = bundled, identification = info.RootElement, usbScriptTested, continuousRun = true, duplicateRunPreserved = true, stopAndRerun = true, errorDetails = true, ram = run, repl = transcript, filesUnchanged = true }, SettingsStore.JsonOptions));
                 }
                 finally
                 {
-                    await WaitStoppedAsync(device); deviceRepl = false; bundled = oldBundled;
-                    settings.Interpreter = oldInterpreter; settings.ExecutionTarget = oldTarget; settings.DevicePort = oldPort; selectedPort = oldPort; UpdateInterpreter();
+                    await StopDeviceAsync(); bundled = oldBundled;
+                    settings.Interpreter = oldInterpreter; settings.ExecutionTarget = oldTarget; settings.DevicePort = oldPort; settings.Workspace = oldWorkspace;
+                    selectedPort = oldPort; Tabs.SelectedItem = oldTab; UpdateInterpreter();
                 }
             });
         await File.WriteAllTextAsync(Path.Combine(directory, "ui-smoke.json"), JsonSerializer.Serialize(new { passed = results.Count - failures, failed = failures, viewport = new { width = Root.ActualWidth, height = Root.ActualHeight }, results }, SettingsStore.JsonOptions));
