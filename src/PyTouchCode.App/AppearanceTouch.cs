@@ -183,7 +183,7 @@ public sealed partial class MainWindow
                 e.Cancel = true; e.Handled = true;
             }
         };
-        control.GotFocus += (_, _) => { if (inputSuspended) control.Editor.Focus = false; };
+        control.GotFocus += (_, _) => { if (inputSuspended) { control.Editor.Focus = false; SuspendNativeTextInput(); } };
         Point origin = default, previous = default;
         Point multiOrigin = default;
         long anchor = 0, firstLine = 0, originalAnchor = 0, originalCaret = 0, xOffset = 0;
@@ -236,11 +236,12 @@ public sealed partial class MainWindow
         void Press(uint id, Point point)
         {
             // XAML focus can stay on the editor after the keyboard was dismissed.
-            // SCI_SETFOCUS also detaches its TSF document, unlike GettingFocus alone.
+            // Suspend native input as well as the control's caret focus.
             inputSuspended = true;
             touchKeyboardGestureOwner = control;
             foreach (var editor in documents.Select(t => t.Control).Concat(consoles))
                 if (editor.IsLoaded && editor.Editor.Focus) editor.Editor.Focus = false;
+            SuspendNativeTextInput();
             inertia.Stop(); pointers[id] = point; hold.Stop();
             EnsureTouchKeyboardGuard();
             if (pointers.Count == 1)
