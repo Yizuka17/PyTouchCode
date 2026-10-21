@@ -69,6 +69,51 @@ await Test("External edits are preserved", async () =>
     var doc = await DocumentFiles.OpenAsync(file); doc.Text = "our edit"; await File.WriteAllTextAsync(file, "external edit");
     await Throws<IOException>(() => DocumentFiles.SaveAsync(doc, file)); Assert(await File.ReadAllTextAsync(file) == "external edit", "External text was clobbered");
 });
+await Test("Workspace sessions preserve drafts and refresh clean files without overwriting external edits", async () =>
+{
+    string folder = Path.Combine(temporary, "session"); Directory.CreateDirectory(folder);
+    string clean = Path.Combine(folder, "clean.py"), dirty = Path.Combine(folder, "dirty.py");
+    await File.WriteAllTextAsync(clean, "# original\n"); await File.WriteAllTextAsync(dirty, "# original\n");
+    var original = await DocumentFiles.OpenAsync(dirty);
+    var store = new WorkspaceSessionStore(folder);
+    await store.SaveAsync(new WorkspaceSession { ActiveIndex = 1, Documents = [
+        new() { Path = clean },
+        new() { Path = dirty, Text = "# 未保存🙂\n", DiskHash = original.DiskHash, Anchor = 4, Caret = 14, FirstVisibleLine = 20, XOffset = 60 },
+        new() { Text = "# 草稿\n" }
+    ] });
+    await File.WriteAllTextAsync(clean, "# external clean\n"); await File.WriteAllTextAsync(dirty, "# external dirty\n");
+    var session = (await new WorkspaceSessionStore(folder).LoadAsync())!;
+    Assert(session.ActiveIndex == 1 && session.Documents.Count == 3 && session.Documents[1].Caret == 14 && session.Documents[1].XOffset == 60, "Session lost order or view state");
+    Assert((await session.Documents[0].RestoreAsync())!.Text == "# external clean\n", "Clean file did not refresh");
+    var recovered = (await session.Documents[1].RestoreAsync())!;
+    Assert(recovered.Dirty && recovered.Text == "# 未保存🙂\n", "Unsaved changes were lost");
+    await Throws<IOException>(() => DocumentFiles.SaveAsync(recovered, dirty));
+    Assert(await File.ReadAllTextAsync(dirty) == "# external dirty\n", "Recovered buffer overwrote external changes");
+    File.Delete(dirty); recovered = (await session.Documents[1].RestoreAsync())!;
+    Assert(recovered.Text == "# 未保存🙂\n", "Missing file lost its unsaved buffer");
+    Assert((await session.Documents[2].RestoreAsync()) is { Path: null, Dirty: true, Text: "# 草稿\n" }, "Untitled draft was lost");
+    string legacy = Path.Combine(folder, "legacy.py");
+    var encoded = new Document { Text = "中文", EncodingName = "gb18030" }; await DocumentFiles.SaveAsync(encoded, legacy);
+    Assert((await new WorkspaceDocument { Path = legacy, EncodingName = encoded.EncodingName }.RestoreAsync())!.Text == "中文", "Session lost legacy encoding");
+    string utf16 = Path.Combine(folder, "utf16.py");
+    var unicode = new Document { Text = "中文\r\n", EncodingName = "utf-16", Bom = true, NewLine = "\r\n" }; await DocumentFiles.SaveAsync(unicode, utf16);
+    Assert((await new WorkspaceDocument { Path = utf16, EncodingName = unicode.EncodingName, Bom = true }.RestoreAsync())!.Text == unicode.Text, "Session changed Unicode BOM content");
+});
+await Test("Corrupt workspace records are preserved instead of overwritten", async () =>
+{
+    var store = new WorkspaceSessionStore(Path.Combine(temporary, "broken-session"));
+    await store.SaveAsync(new WorkspaceSession()); await File.WriteAllTextAsync(store.FilePath, "{broken");
+    await Throws<JsonException>(() => store.LoadAsync());
+    await Throws<IOException>(() => store.SaveAsync(new WorkspaceSession()));
+    Assert(await File.ReadAllTextAsync(store.FilePath) == "{broken", "Corrupt recovery data was overwritten");
+    var retry = new WorkspaceSessionStore(Path.Combine(temporary, "session-write-retry"));
+    Directory.CreateDirectory(retry.FilePath);
+    try { await retry.SaveAsync(new WorkspaceSession()); throw new Exception("Expected a write failure"); }
+    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    Directory.Delete(retry.FilePath);
+    await retry.SaveAsync(new WorkspaceSession { Documents = [new() { Text = "retained" }] });
+    Assert((await retry.LoadAsync())!.Documents[0].Text == "retained", "Failed write prevented a subsequent recovery save");
+});
 await Test("Settings persist and validate", async () =>
 {
     var store = new SettingsStore(Path.Combine(temporary, "settings"));

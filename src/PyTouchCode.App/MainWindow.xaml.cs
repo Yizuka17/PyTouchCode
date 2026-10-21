@@ -16,6 +16,7 @@ public sealed partial class MainWindow : Window
     static string? CommandDirectory(string option) { var args = Environment.GetCommandLineArgs(); int index = Array.IndexOf(args, option); return index >= 0 && index + 1 < args.Length ? Path.GetFullPath(args[index + 1]) : null; }
     static string? SmokeDirectory => CommandDirectory("--smoke-test");
     static string? PreviewDirectory => CommandDirectory("--preview-directory");
+    static string? SessionTestPhase { get { var args = Environment.GetCommandLineArgs(); int index = Array.IndexOf(args, "--session-phase"); return index >= 0 && index + 1 < args.Length ? args[index + 1] : null; } }
     readonly SettingsStore store = new(SmokeDirectory is { } smoke ? Path.Combine(smoke, "settings") : PreviewDirectory ?? AppDataPaths.Directory);
     AppSettings settings = new();
     readonly ProcessSession runner = new(), shell = new(), repl = new(), device = new(), maintenance = new();
@@ -34,6 +35,7 @@ public sealed partial class MainWindow : Window
     EditorTab? Active => Tabs.SelectedItem is TabViewItem item ? item.Tag as EditorTab : null;
     public MainWindow()
     {
+        sessionStore = new WorkspaceSessionStore(store.DirectoryPath);
         App.StartupPhase = "MainWindow XAML"; InitializeComponent(); Title = "PyTouchCode";
         App.StartupPhase = "Window icon";
         try { AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "PyTouchCode.ico")); }
@@ -53,6 +55,9 @@ public sealed partial class MainWindow : Window
             console.Loaded += (_, _) => { ConfigureEditor(console, true); console.Editor.ReadOnly = false; };
         }
         outputTimer.Tick += (_, _) => FlushOutput();
+        sessionTimer.Tick += async (_, _) => { sessionTimer.Stop(); await SafeAsync(SaveSessionAsync); };
+        Tabs.TabDragCompleted += (_, _) => ScheduleSessionSave();
+        Root.PreviewKeyDown += (_, args) => { if (closePending) args.Handled = true; };
         ConnectOutput(runner, 0); ConnectOutput(shell, 1); ConnectOutput(repl, 2); ConnectOutput(device, 3); ConnectOutput(maintenance, 0);
         Root.Loaded += async (_, _) => await SafeAsync(InitializeAsync);
         Root.ActualThemeChanged += (_, _) => { if (ready) ApplyAppearance(); };
@@ -60,14 +65,8 @@ public sealed partial class MainWindow : Window
         {
             if (closing) return;
             args.Cancel = true;
-            await SafeAsync(async () =>
-            {
-                if (dialogOpen) return;
-                foreach (var tab in documents.ToArray()) if (!await ConfirmSaveAsync(tab)) return;
-                closing = true; runner.Stop(); shell.Stop(); repl.Stop(); maintenance.Stop(); await StopDeviceAsync();
-                if (debugger is not null) await debugger.DisposeAsync();
-                language.Stop(); await store.SaveAsync(settings); Close();
-            });
+            if (!ready) return;
+            await SafeAsync(CloseWorkspaceAsync);
         };
         AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control, "new"); AddShortcut(VirtualKey.O, VirtualKeyModifiers.Control, "open");
         AddShortcut(VirtualKey.S, VirtualKeyModifiers.Control, "save"); AddShortcut(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, "saveas");
@@ -92,8 +91,11 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception e) { Notify("配置未加载：" + e.Message + " 原文件已保留，请修复配置后重新启动。"); return; }
         App.StartupPhase = "Appearance"; ApplyAppearance();
-        App.StartupPhase = "First document";
-        NewDocument("# 欢迎使用 PyTouchCode\n# 新建或打开 Python 文件，然后按 F5 运行。\n\nname = input(\"你的名字：\")\nprint(f\"你好，{name}！\")\n");
+        App.StartupPhase = "Workspace session";
+        if (SmokeDirectory is not null && SessionTestPhase is null) NewDocument();
+        else await RestoreSessionAsync();
+        if (Active is null) { PositionStatus.Text = ""; EncodingStatus.Text = ""; }
+        sessionReady = SmokeDirectory is null || SessionTestPhase is not null;
         ready = true;
         App.StartupPhase = "Runtime";
         var progress = new Progress<string>(value => ViewModel.InterpreterLabel = value);
@@ -104,10 +106,17 @@ public sealed partial class MainWindow : Window
         if (Directory.Exists(settings.Workspace)) await RefreshFilesAsync();
         if (PreviewDirectory is not null && FileTree.RootNodes.Count > 0) FileTree.SelectedNode = FileTree.RootNodes[0];
         App.StartupPhase = "Ready";
-        if (SmokeDirectory is not null) { await RunSmokeTestsAsync(SmokeDirectory); return; }
+        if (SmokeDirectory is not null)
+        {
+            if (SessionTestPhase is { } phase) { sessionReady = true; await RunSessionRestartProbeAsync(SmokeDirectory, phase); }
+            else await RunSmokeTestsAsync(SmokeDirectory);
+            return;
+        }
         foreach (string file in Environment.GetCommandLineArgs().Skip(1).Where(File.Exists)) await OpenDocumentAsync(file);
         settings.Initialized = true;
         await store.SaveAsync(settings);
+        sessionReady = true;
+        await SaveSessionAsync();
     }
     void AddShortcut(VirtualKey key, VirtualKeyModifiers modifiers, string command)
     {
