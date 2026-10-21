@@ -21,6 +21,8 @@ internal sealed class EditorTab
     public bool ShowHandles { get; set; }
     public bool Loading { get; set; }
     public bool Initialized { get; set; }
+    public bool RecoveredUnsaved { get; set; }
+    public WorkspaceDocument? PendingSessionView { get; set; }
     public int Revision { get; set; }
     public CancellationTokenSource? CompletionCancellation { get; set; }
     public DispatcherTimer CompletionTimer { get; } = new() { Interval = TimeSpan.FromMilliseconds(350) };

@@ -10,7 +10,7 @@ namespace PyTouchCode.App;
 public sealed partial class MainWindow
 {
     void NewDocument(string text = "") => AddDocument(new Document { Text = text });
-    void AddDocument(Document document)
+    void AddDocument(Document document, WorkspaceDocument? sessionView = null)
     {
         var control = new EditorBaseControl();
         var ghost = new TextBlock { IsHitTestVisible = false, Opacity = .45, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Visibility = Visibility.Collapsed };
@@ -22,12 +22,14 @@ public sealed partial class MainWindow
         handles.Children.Add(startHandle); handles.Children.Add(endHandle); grid.Children.Add(handles);
         var item = new TabViewItem { Header = document.Name };
         var tab = new EditorTab { Document = document, Control = control, Item = item, View = grid, Ghost = ghost, Handles = handles, Folds = folds, StartHandle = startHandle, EndHandle = endHandle };
+        tab.PendingSessionView = sessionView; tab.RecoveredUnsaved = document.Dirty;
         item.Tag = tab; documents.Add(tab); EditorHost.Children.Add(grid); Tabs.TabItems.Add(item); Tabs.SelectedItem = item;
         control.Loaded += (_, _) =>
         {
             if (tab.Initialized) return; tab.Loading = true;
             ConfigureEditor(control, false); control.Editor.SetText(document.Text); control.Editor.EmptyUndoBuffer(); control.Editor.SetSavePoint();
             tab.Loading = false; tab.Initialized = true;
+            RestoreSessionView(tab);
             RequestFoldOverlay(tab);
         };
         control.Editor.Modified += (_, args) =>
@@ -38,9 +40,9 @@ public sealed partial class MainWindow
             UpdateTab(tab); tab.CompletionCancellation?.Cancel(); tab.CompletionTimer.Stop();
             if (settings.Completion && File.Exists(settings.Interpreter)) tab.CompletionTimer.Start();
         };
-        control.Editor.SavePointReached += (_, _) => { if (!tab.Loading) { document.Dirty = false; UpdateTab(tab); } };
-        control.Editor.UpdateUI += (_, args) => { UpdatePosition(tab); UpdateSelectionHandles(tab); if ((args.Updated & 1) != 0) tab.FoldEnds.Clear(); RequestFoldOverlay(tab); if ((args.Updated & 2) != 0) { tab.Ghost.Visibility = Visibility.Collapsed; tab.GhostInsertion = ""; } };
-        control.SizeChanged += (_, _) => RequestFoldOverlay(tab);
+        control.Editor.SavePointReached += (_, _) => { if (!tab.Loading) { document.Dirty = tab.RecoveredUnsaved; UpdateTab(tab); } };
+        control.Editor.UpdateUI += (_, args) => { UpdatePosition(tab); UpdateSelectionHandles(tab); if ((args.Updated & 1) != 0) tab.FoldEnds.Clear(); RequestFoldOverlay(tab); ScheduleSessionSave(); if ((args.Updated & 2) != 0) { tab.Ghost.Visibility = Visibility.Collapsed; tab.GhostInsertion = ""; } };
+        control.SizeChanged += (_, _) => { RequestFoldOverlay(tab); RestoreSessionView(tab); };
         control.DpiChanged += (_, _) => RequestFoldOverlay(tab);
         control.Editor.CharAdded += (_, args) => AutoPairAndIndent(tab, args.Ch);
         control.Editor.MarginClick += async (_, args) => await SafeAsync(async () =>
@@ -58,6 +60,7 @@ public sealed partial class MainWindow
         AttachTouch(control, () => { tab.ShowHandles = true; UpdateSelectionHandles(tab); });
         AttachSelectionHandle(tab, startHandle, true); AttachSelectionHandle(tab, endHandle, false);
         UpdateTab(tab);
+        ScheduleSessionSave();
     }
     void UpdateTab(EditorTab tab)
     {
@@ -66,6 +69,7 @@ public sealed partial class MainWindow
         tab.Item.Header = tab.Document.Name + (tab.Document.Dirty ? " ●" : "");
         ToolTipService.SetToolTip(tab.Item, tab.Document.Path ?? "尚未保存");
         if (Active == tab) { Title = tab.Document.Name + " — PyTouchCode"; UpdatePosition(tab); RequestFoldOverlay(tab); }
+        ScheduleSessionSave();
     }
     void UpdatePosition(EditorTab tab)
     {
@@ -116,7 +120,7 @@ public sealed partial class MainWindow
     {
         tab.Document.Text = tab.Control.Editor.GetText(tab.Control.Editor.Length + 1);
         await DocumentFiles.SaveAsync(tab.Document, path);
-        tab.Control.Editor.SetSavePoint(); UpdateTab(tab);
+        tab.RecoveredUnsaved = false; tab.Control.Editor.SetSavePoint(); UpdateTab(tab);
         SettingsStore.Remember(settings.RecentFiles, path); await store.SaveAsync(settings); RefreshRecent(); return true;
     }
     async Task<bool> ConfirmSaveAsync(EditorTab tab)
@@ -130,7 +134,7 @@ public sealed partial class MainWindow
     {
         if (!await ConfirmSaveAsync(tab)) return;
         tab.CompletionCancellation?.Cancel(); tab.CompletionTimer.Stop(); documents.Remove(tab); Tabs.TabItems.Remove(tab.Item); EditorHost.Children.Remove(tab.View);
-        if (documents.Count == 0) NewDocument();
+        ScheduleSessionSave();
     }
     async Task ReloadAsync(EditorTab tab)
     {
@@ -142,12 +146,18 @@ public sealed partial class MainWindow
         }
         var doc = await DocumentFiles.OpenAsync(tab.Document.Path);
         tab.Loading = true; tab.Control.Editor.SetText(doc.Text); tab.Control.Editor.EmptyUndoBuffer(); tab.Control.Editor.SetSavePoint();
-        tab.Document.Text = doc.Text; tab.Document.EncodingName = doc.EncodingName; tab.Document.Bom = doc.Bom; tab.Document.NewLine = doc.NewLine; tab.Document.DiskHash = doc.DiskHash; tab.Document.Dirty = false;
+        tab.Document.Text = doc.Text; tab.Document.EncodingName = doc.EncodingName; tab.Document.Bom = doc.Bom; tab.Document.NewLine = doc.NewLine; tab.Document.DiskHash = doc.DiskHash; tab.Document.Dirty = false; tab.RecoveredUnsaved = false;
         tab.Loading = false; tab.BreakpointHandles.Clear(); UpdateTab(tab);
     }
     void NewTabClicked(TabView sender, object args) => NewDocument();
     async void TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args) { if (args.Tab.Tag is EditorTab tab) await SafeAsync(() => CloseTabAsync(tab)); }
-    void TabSelectionChanged(object sender, SelectionChangedEventArgs e) { foreach (var document in documents) document.View.Visibility = document == Active ? Visibility.Visible : Visibility.Collapsed; if (Active is { } tab) { UpdateTab(tab); tab.Control.Focus(FocusState.Programmatic); } }
+    void TabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        foreach (var document in documents) document.View.Visibility = document == Active ? Visibility.Visible : Visibility.Collapsed;
+        if (Active is { } tab) { UpdateTab(tab); tab.Control.Focus(FocusState.Programmatic); DispatcherQueue.TryEnqueue(() => RestoreSessionView(tab)); }
+        else { Title = "PyTouchCode"; PositionStatus.Text = ""; EncodingStatus.Text = ""; }
+        ScheduleSessionSave();
+    }
     async Task RefreshFilesAsync()
     {
         FileTree.RootNodes.Clear(); ViewModel.WorkspaceLabel = Directory.Exists(settings.Workspace) ? settings.Workspace : "Python 工作区";

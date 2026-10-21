@@ -20,16 +20,71 @@ public sealed partial class MainWindow
         void EnumDocumentMgrs(out nint documents);
         void GetFocus(out nint document);
     }
-    static bool HasNativeTextDocument()
+    [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("AA80E7F4-2021-11D2-93E0-0060B067B86E"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    interface ITouchTsfDocument
     {
-        var manager = (ITouchTsfThreadManager)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("529A9E6B-6587-4F23-AB9E-9C7D683E3C50"))!)!;
+        void CreateContext(uint client, uint flags, nint owner, out nint context, out uint cookie);
+        void Push(nint context);
+        void Pop(uint flags);
+        [System.Runtime.InteropServices.PreserveSig] int GetTop(ref nint context);
+    }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct TouchTsfStatus { public uint DynamicFlags, StaticFlags; }
+    [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("AA80E7FD-2021-11D2-93E0-0060B067B86E"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    interface ITouchTsfContext
+    {
+        void RequestEditSession(uint client, nint session, uint flags, out int result);
+        void InWriteSession(uint client, out int writing);
+        void GetSelection(uint cookie, uint index, uint count, nint selection, out uint fetched);
+        void SetSelection(uint cookie, uint count, nint selection);
+        void GetStart(uint cookie, out nint range);
+        void GetEnd(uint cookie, out nint range);
+        void GetActiveView(out nint view);
+        void EnumViews(out nint views);
+        void GetStatus(out TouchTsfStatus status);
+    }
+    ITouchTsfThreadManager? touchProbeManager;
+    nint CurrentNativeTextDocument()
+    {
+        if (touchProbeManager is null)
+        {
+            touchProbeManager = (ITouchTsfThreadManager)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("529A9E6B-6587-4F23-AB9E-9C7D683E3C50"))!)!;
+            Closed += (_, _) => { if (touchProbeManager is not null) System.Runtime.InteropServices.Marshal.ReleaseComObject(touchProbeManager); touchProbeManager = null; };
+        }
+        touchProbeManager.GetFocus(out nint document); return document;
+    }
+    bool HasEditableNativeInput()
+    {
+        nint document = CurrentNativeTextDocument();
+        if (document == 0) return false;
+        object manager = System.Runtime.InteropServices.Marshal.GetObjectForIUnknown(document);
         try
         {
-            manager.GetFocus(out nint document);
-            if (document == 0) return false;
-            System.Runtime.InteropServices.Marshal.Release(document); return true;
+            nint context = 0;
+            int result = ((ITouchTsfDocument)manager).GetTop(ref context);
+            if (result < 0) System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(result);
+            if (context == 0) return false;
+            object nativeContext = System.Runtime.InteropServices.Marshal.GetObjectForIUnknown(context);
+            try
+            {
+                TouchTsfStatus status;
+                try { ((ITouchTsfContext)nativeContext).GetStatus(out status); }
+                catch (System.Runtime.InteropServices.COMException e) when (e.HResult is unchecked((int)0x80040509) or unchecked((int)0x80040504))
+                {
+                    // Windows can expose a placeholder context for an empty document.
+                    File.AppendAllText(Path.Combine(SmokeDirectory!, "tsf-status.txt"), $"document=0x{document:X} neutral=0x{gestureInputDocument:X} input=none hresult=0x{e.HResult:X}\n");
+                    return false;
+                }
+                File.AppendAllText(Path.Combine(SmokeDirectory!, "tsf-status.txt"), $"document=0x{document:X} neutral=0x{gestureInputDocument:X} context=0x{context:X} result={result} dynamic={status.DynamicFlags} static={status.StaticFlags}\n");
+                return (status.DynamicFlags & 1) == 0;
+            }
+            finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(nativeContext); System.Runtime.InteropServices.Marshal.Release(context); }
         }
-        finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(manager); }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.ReleaseComObject(manager);
+            System.Runtime.InteropServices.Marshal.Release(document);
+        }
     }
     // Opt-in integration harness. Exercises the real WinUI and native editor on
     // the UI thread, with isolated settings; never enabled during normal startup.
@@ -409,21 +464,28 @@ public sealed partial class MainWindow
                 Assert(ed.CurrentPos == caret && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Cancelled touch became a tap");
                 long expected = TouchPosition(control, origin);
                 gate.Press(3, origin); gate.Move(3, new Windows.Foundation.Point(origin.X + 1, origin.Y + 1)); gate.Release(3);
-                Assert(ed.CurrentPos == expected && control.FocusState == FocusState.Pointer && ed.Focus && HasNativeTextDocument(), "Confirmed tap did not position the caret and enable native text input");
+                Assert(ed.CurrentPos == expected && control.FocusState == FocusState.Pointer && ed.Focus && HasEditableNativeInput(), "Confirmed tap did not position the caret and enable native text input");
                 long focusedCaret = ed.CurrentPos, focusedAnchor = ed.Anchor;
+                nint previousDocument = CurrentNativeTextDocument();
                 gate.Press(10, origin);
-                Assert(!ed.Focus && !HasNativeTextDocument() && ShouldBlockGestureKeyboard(), "Already focused editor retained the native input document or allowed the keyboard during touch down");
+                nint nextDocument = CurrentNativeTextDocument();
+                string documentIdentity = $"previous=0x{previousDocument:X}, next=0x{nextDocument:X}, neutral=0x{gestureInputDocument:X}";
+                if (previousDocument != 0) System.Runtime.InteropServices.Marshal.Release(previousDocument);
+                if (nextDocument != 0) System.Runtime.InteropServices.Marshal.Release(nextDocument);
+                bool hasDocument = HasEditableNativeInput(), blocked = ShouldBlockGestureKeyboard();
+                var focusedElement = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot);
+                Assert(!ed.Focus && !hasDocument && blocked, $"Already focused editor retained the native input document or allowed the keyboard during touch down: terminal={control == consoles[0]}, nativeFocus={ed.Focus}, document={hasDocument}, {documentIdentity}, blocked={blocked}, gateBlocked={gate.BlockKeyboard()}, xamlFocus={control.FocusState}, focused={focusedElement?.GetType().Name}, self={ReferenceEquals(control, focusedElement)}, owner={ReferenceEquals(control, touchKeyboardGestureOwner)}");
                 gate.Move(10, new Windows.Foundation.Point(origin.X + 1, origin.Y - 100)); gate.Release(10);
-                Assert(!ed.Focus && !HasNativeTextDocument() && ed.CurrentPos == focusedCaret && ed.Anchor == focusedAnchor, "Swipe reactivated the native input document or moved the caret");
+                Assert(!ed.Focus && !HasEditableNativeInput() && ed.CurrentPos == focusedCaret && ed.Anchor == focusedAnchor, "Swipe reactivated the native input document or moved the caret");
                 gate.ResumeInput();
-                Assert(ed.Focus && HasNativeTextDocument() && !ShouldBlockGestureKeyboard(), "Hardware keyboard input could not resume after a swipe");
+                Assert(ed.Focus && HasEditableNativeInput() && !ShouldBlockGestureKeyboard(), "Hardware keyboard input could not resume after a swipe");
                 if (control == consoles[0])
                 {
                     tab.Control.Focus(FocusState.Pointer); tab.Control.Editor.Focus = true;
                     gate.Press(11, origin); gate.Move(11, new Windows.Foundation.Point(origin.X, origin.Y - 80)); gate.Release(11);
-                    Assert(!HasNativeTextDocument() && !tab.Control.Editor.Focus, "Scrolling another pane retained the previous editor's native input document");
+                    Assert(!HasEditableNativeInput() && !tab.Control.Editor.Focus, "Scrolling another pane retained the previous editor's native input document");
                     touchInputs.GetValue(tab.Control, _ => throw new InvalidOperationException("Touch gate missing")).ResumeInput();
-                    Assert(HasNativeTextDocument(), "Hardware input could not resume in the previously focused pane");
+                    Assert(HasEditableNativeInput(), "Hardware input could not resume in the previously focused pane");
                 }
                 Assert(RunButton.Focus(FocusState.Programmatic), "Unable to move focus before horizontal selection");
                 long horizontalOffset = ed.XOffset, verticalOffset = ed.FirstVisibleLine;
@@ -455,7 +517,12 @@ public sealed partial class MainWindow
             {
                 settings.WordWrap = originalWrap; settings.EditorFontSize = originalEditorFont; settings.TerminalFontSize = originalTerminalFont; ApplyAppearance();
                 ClearTerminal(0);
-                foreach (var control in new[] { tab.Control, consoles[0] }) { control.Editor.SetEmptySelection(0); control.Editor.XOffset = 0; S(control, 2613, 0); }
+                RunButton.Focus(FocusState.Programmatic);
+                foreach (var control in new[] { tab.Control, consoles[0] })
+                {
+                    if (touchInputs.TryGetValue(control, out var gate)) foreach (uint id in Enumerable.Range(1, 11).Select(n => (uint)n)) gate.Cancel(id);
+                    control.Editor.SetEmptySelection(0); control.Editor.XOffset = 0; S(control, 2613, 0);
+                }
             }
         });
         await Test("folding uses chevrons on headers and vertical scope lines", async () =>
@@ -481,7 +548,7 @@ public sealed partial class MainWindow
             Assert(ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Folding acquired text focus");
             tab.Control.Focus(FocusState.Pointer); ed.Focus = true;
             gate.Press(32, point); gate.Release(32);
-            Assert(!HasNativeTextDocument() && ShouldBlockGestureKeyboard(), "Folding an already focused editor reactivated the keyboard");
+            Assert(!HasEditableNativeInput() && ShouldBlockGestureKeyboard(), "Folding an already focused editor reactivated the keyboard");
             gate.Press(33, point); gate.Release(33);
             UpdateFoldOverlay(tab);
             var strokes = tab.Folds.Children.OfType<Microsoft.UI.Xaml.Shapes.Line>().Where(l => l.Visibility == Visibility.Visible).ToArray();
