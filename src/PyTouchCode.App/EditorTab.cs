@@ -12,6 +12,10 @@ internal sealed class EditorTab
     public required Grid View { get; init; }
     public required TextBlock Ghost { get; init; }
     public required Canvas Handles { get; init; }
+    public required Canvas Folds { get; init; }
+    public List<(long Line, Windows.Foundation.Rect Bounds)> FoldTargets { get; } = [];
+    public Dictionary<long, long> FoldEnds { get; } = [];
+    public bool FoldUpdateQueued { get; set; }
     public required Border StartHandle { get; init; }
     public required Border EndHandle { get; init; }
     public bool ShowHandles { get; set; }

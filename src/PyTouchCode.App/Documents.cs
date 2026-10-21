@@ -15,33 +15,37 @@ public sealed partial class MainWindow
         var control = new EditorBaseControl();
         var ghost = new TextBlock { IsHitTestVisible = false, Opacity = .45, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Visibility = Visibility.Collapsed };
         var grid = new Grid(); grid.Children.Add(control); grid.Children.Add(ghost);
+        var folds = new Canvas { IsHitTestVisible = false, IsTabStop = false }; grid.Children.Add(folds);
         var handles = new Canvas { IsTabStop = false };
         var startHandle = new Border { Width = 24, Height = 24, CornerRadius = new CornerRadius(12), Background = new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue), Visibility = Visibility.Collapsed };
         var endHandle = new Border { Width = 24, Height = 24, CornerRadius = new CornerRadius(12), Background = new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue), Visibility = Visibility.Collapsed };
         handles.Children.Add(startHandle); handles.Children.Add(endHandle); grid.Children.Add(handles);
         var item = new TabViewItem { Header = document.Name };
-        var tab = new EditorTab { Document = document, Control = control, Item = item, View = grid, Ghost = ghost, Handles = handles, StartHandle = startHandle, EndHandle = endHandle };
+        var tab = new EditorTab { Document = document, Control = control, Item = item, View = grid, Ghost = ghost, Handles = handles, Folds = folds, StartHandle = startHandle, EndHandle = endHandle };
         item.Tag = tab; documents.Add(tab); EditorHost.Children.Add(grid); Tabs.TabItems.Add(item); Tabs.SelectedItem = item;
         control.Loaded += (_, _) =>
         {
             if (tab.Initialized) return; tab.Loading = true;
             ConfigureEditor(control, false); control.Editor.SetText(document.Text); control.Editor.EmptyUndoBuffer(); control.Editor.SetSavePoint();
             tab.Loading = false; tab.Initialized = true;
+            RequestFoldOverlay(tab);
         };
         control.Editor.Modified += (_, args) =>
         {
+            if ((args.ModificationType & 11) != 0) { tab.FoldEnds.Clear(); RequestFoldOverlay(tab); }
             if (tab.Loading || (args.ModificationType & 3) == 0) return;
             document.Dirty = true; tab.Revision++; tab.Ghost.Visibility = Visibility.Collapsed; tab.GhostInsertion = "";
             UpdateTab(tab); tab.CompletionCancellation?.Cancel(); tab.CompletionTimer.Stop();
             if (settings.Completion && File.Exists(settings.Interpreter)) tab.CompletionTimer.Start();
         };
         control.Editor.SavePointReached += (_, _) => { if (!tab.Loading) { document.Dirty = false; UpdateTab(tab); } };
-        control.Editor.UpdateUI += (_, args) => { UpdatePosition(tab); UpdateSelectionHandles(tab); if ((args.Updated & 2) != 0) { tab.Ghost.Visibility = Visibility.Collapsed; tab.GhostInsertion = ""; } };
+        control.Editor.UpdateUI += (_, args) => { UpdatePosition(tab); UpdateSelectionHandles(tab); if ((args.Updated & 1) != 0) tab.FoldEnds.Clear(); RequestFoldOverlay(tab); if ((args.Updated & 2) != 0) { tab.Ghost.Visibility = Visibility.Collapsed; tab.GhostInsertion = ""; } };
+        control.SizeChanged += (_, _) => RequestFoldOverlay(tab);
+        control.DpiChanged += (_, _) => RequestFoldOverlay(tab);
         control.Editor.CharAdded += (_, args) => AutoPairAndIndent(tab, args.Ch);
         control.Editor.MarginClick += async (_, args) => await SafeAsync(async () =>
         {
             if (args.Margin == 1) await ToggleBreakpointAsync(tab, (int)control.Editor.LineFromPosition(args.Position));
-            else if (args.Margin == 2) control.Editor.ToggleFold(control.Editor.LineFromPosition(args.Position));
         });
         control.Editor.DwellStart += async (_, args) => await SafeAsync(() => HoverAsync(tab, args.Position));
         control.Editor.DwellEnd += (_, _) => control.Editor.CallTipCancel();
@@ -61,7 +65,7 @@ public sealed partial class MainWindow
         if (key != tab.IconKey) { tab.Item.IconSource = FileTypeIcon(key); tab.IconKey = key; }
         tab.Item.Header = tab.Document.Name + (tab.Document.Dirty ? " ●" : "");
         ToolTipService.SetToolTip(tab.Item, tab.Document.Path ?? "尚未保存");
-        if (Active == tab) { Title = tab.Document.Name + " — PyTouchCode"; UpdatePosition(tab); }
+        if (Active == tab) { Title = tab.Document.Name + " — PyTouchCode"; UpdatePosition(tab); RequestFoldOverlay(tab); }
     }
     void UpdatePosition(EditorTab tab)
     {
