@@ -206,7 +206,9 @@ await Test("Cancellation stops process and session can restart", async () =>
     await using var session = new ProcessSession(); using var ct = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
     var watch = System.Diagnostics.Stopwatch.StartNew(); await session.RunAsync(python, ["-u", "-c", "import time;time.sleep(60)"], temporary, cancellationToken: ct.Token);
     Assert(watch.Elapsed < TimeSpan.FromSeconds(8) && !session.IsRunning, "Process did not stop");
+    Assert(session.StopRequested, "Intentional stop was not recorded");
     Assert(await session.RunAsync(python, ["-c", "print('restart')"], temporary) == 0, "Session cannot restart");
+    Assert(!session.StopRequested, "Intentional stop leaked into the next successful run");
 });
 await Test("Independent PowerShell session accepts commands with no Profile", async () =>
 {

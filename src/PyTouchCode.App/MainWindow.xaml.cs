@@ -64,7 +64,7 @@ public sealed partial class MainWindow : Window
             {
                 if (dialogOpen) return;
                 foreach (var tab in documents.ToArray()) if (!await ConfirmSaveAsync(tab)) return;
-                closing = true; runner.Stop(); shell.Stop(); repl.Stop(); device.Stop(); maintenance.Stop();
+                closing = true; runner.Stop(); shell.Stop(); repl.Stop(); maintenance.Stop(); await StopDeviceAsync();
                 if (debugger is not null) await debugger.DisposeAsync();
                 language.Stop(); await store.SaveAsync(settings); Close();
             });
@@ -132,10 +132,23 @@ public sealed partial class MainWindow : Window
     }
     void Notify(string message, bool error = false) { Notice.Message = message; Notice.Severity = error ? InfoBarSeverity.Error : InfoBarSeverity.Informational; Notice.IsOpen = true; }
     void UpdateInterpreter() => ViewModel.InterpreterLabel = settings.ExecutionTarget == "MicroPython" ? "MicroPython / Pyboard " + settings.DevicePort : File.Exists(settings.Interpreter) ? "Python " + settings.Interpreter : "选择解释器…";
+    static string ExitReason(int code) => code switch
+    {
+        -1 => "进程被终止",
+        -1073741515 => "运行环境缺少 DLL",
+        -1073741510 => "运行被中断",
+        1 => "程序或命令未成功完成",
+        _ => "请查看上方错误输出"
+    };
     void ConnectOutput(ProcessSession session, int channel)
     {
         session.Output += (text, error) => QueueOutput(channel, text);
-        session.Exited += code => QueueOutput(channel, $"\n[进程退出，代码 {code}]\n");
+        session.Exited += code =>
+        {
+            bool stopped = session.StopRequested || (channel == 3 && (deviceStopping || deviceCommand?.IsCancellationRequested == true));
+            string result = stopped ? "已停止" : code == 0 ? "运行成功" : "运行失败：" + ExitReason(code);
+            QueueOutput(channel, $"\n[{result}，退出代码 {code}]\n");
+        };
     }
     void QueueOutput(int channel, string text)
     {
@@ -200,15 +213,15 @@ public sealed partial class MainWindow : Window
             case "lf": case "crlf": if (tab is not null) { tab.Document.NewLine = command == "lf" ? "\n" : "\r\n"; tab.Document.Dirty = true; UpdateTab(tab); } break;
             case "utf8": case "utf8bom": case "utf16": case "gb18030": if (tab is not null) { tab.Document.EncodingName = command == "utf16" ? "utf-16" : command == "gb18030" ? "gb18030" : "utf-8"; tab.Document.Bom = command is "utf8bom" or "utf16"; tab.Document.Dirty = true; UpdateTab(tab); } break;
             case "run": await RunFileAsync(false); break;
-            case "rerun": await runner.StopAsync(); await RunFileAsync(false); break;
+            case "rerun": if (settings.ExecutionTarget == "MicroPython") await StopDeviceAsync(true); else await runner.StopAsync(); await RunFileAsync(false); break;
             case "debug": await RunFileAsync(true); break;
-            case "stop": runner.Stop(); if (OutputChannel.SelectedIndex == 3 && device.IsRunning) await InterruptDeviceAsync(); if (debugger is not null) { var stopped = debugger; debugger = null; await stopped.DisposeAsync(); DebugState.Text = "调试已停止"; } break;
+            case "stop": runner.Stop(); if (deviceCommand is not null || (settings.ExecutionTarget == "MicroPython" && device.IsRunning)) await InterruptDeviceAsync(); if (debugger is not null) { var stopped = debugger; debugger = null; await stopped.DisposeAsync(); DebugState.Text = "调试已停止"; } break;
             case "breakpoint": if (tab is not null) await ToggleBreakpointAsync(tab, (int)ed!.LineFromPosition(ed.CurrentPos)); break;
             case "continue": case "next": case "stepIn": case "stepOut": if (debugger is not null && debugThread > 0) await debugger.RequestAsync(command, new { threadId = debugThread }); else Notify("请先启动调试并暂停到断点。"); break;
             case "shell": await StartShellAsync(); break;
             case "repl": await StartReplAsync(); break;
             case "startchannel": if (OutputChannel.SelectedIndex == 1) await StartShellAsync(); else if (OutputChannel.SelectedIndex == 2) await StartReplAsync(); else if (OutputChannel.SelectedIndex == 3) await DeviceDialogAsync(); else await RunFileAsync(false); break;
-            case "closeterminal": new[] { runner, shell, repl, device }[Math.Max(0, OutputChannel.SelectedIndex)].Stop(); break;
+            case "closeterminal": if (OutputChannel.SelectedIndex == 3) await StopDeviceAsync(); else new[] { runner, shell, repl }[Math.Max(0, OutputChannel.SelectedIndex)].Stop(); break;
             case "clear": ClearTerminal(Math.Max(0, OutputChannel.SelectedIndex)); break;
             case "environment": await EnvironmentDialogAsync(); break;
             case "settings": await SettingsDialogAsync(); break;
@@ -221,7 +234,9 @@ public sealed partial class MainWindow : Window
         if (settings.ExecutionTarget == "MicroPython")
         {
             if (debug) { Notify("MicroPython 暂不支持断点调试。"); return; }
-            if (Active is not { } boardTab || !await SaveDocumentAsync(boardTab)) return;
+            if (deviceStopping || deviceOperations.CurrentCount == 0) { Notify("设备正在执行任务，请先停止。"); return; }
+            if (Active is not { } boardTab) return;
+            if ((boardTab.Document.Path is null || boardTab.Document.Dirty) && !await SaveDocumentAsync(boardTab)) return;
             await MpRemoteAsync(SerialDevices.ValidatePort(settings.DevicePort), "run", boardTab.Document.Path!); return;
         }
         if (runner.IsRunning || debugger?.IsRunning == true) { Notify("请先停止当前运行或调试会话。"); return; }
