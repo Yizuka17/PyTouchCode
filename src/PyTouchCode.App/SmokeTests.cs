@@ -11,6 +11,26 @@ using Windows.Graphics.Imaging;
 namespace PyTouchCode.App;
 public sealed partial class MainWindow
 {
+    [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("AA80E801-2021-11D2-93E0-0060B067B86E"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    interface ITouchTsfThreadManager
+    {
+        void Activate(out uint id);
+        void Deactivate();
+        void CreateDocumentMgr(out nint document);
+        void EnumDocumentMgrs(out nint documents);
+        void GetFocus(out nint document);
+    }
+    static bool HasNativeTextDocument()
+    {
+        var manager = (ITouchTsfThreadManager)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("529A9E6B-6587-4F23-AB9E-9C7D683E3C50"))!)!;
+        try
+        {
+            manager.GetFocus(out nint document);
+            if (document == 0) return false;
+            System.Runtime.InteropServices.Marshal.Release(document); return true;
+        }
+        finally { System.Runtime.InteropServices.Marshal.ReleaseComObject(manager); }
+    }
     // Opt-in integration harness. Exercises the real WinUI and native editor on
     // the UI thread, with isolated settings; never enabled during normal startup.
     async Task RunSmokeTestsAsync(string directory)
@@ -389,7 +409,22 @@ public sealed partial class MainWindow
                 Assert(ed.CurrentPos == caret && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Cancelled touch became a tap");
                 long expected = TouchPosition(control, origin);
                 gate.Press(3, origin); gate.Move(3, new Windows.Foundation.Point(origin.X + 1, origin.Y + 1)); gate.Release(3);
-                Assert(ed.CurrentPos == expected && control.FocusState == FocusState.Pointer, "Confirmed tap did not position the caret and enable text input");
+                Assert(ed.CurrentPos == expected && control.FocusState == FocusState.Pointer && ed.Focus && HasNativeTextDocument(), "Confirmed tap did not position the caret and enable native text input");
+                long focusedCaret = ed.CurrentPos, focusedAnchor = ed.Anchor;
+                gate.Press(10, origin);
+                Assert(!ed.Focus && !HasNativeTextDocument() && ShouldBlockGestureKeyboard(), "Already focused editor retained the native input document or allowed the keyboard during touch down");
+                gate.Move(10, new Windows.Foundation.Point(origin.X + 1, origin.Y - 100)); gate.Release(10);
+                Assert(!ed.Focus && !HasNativeTextDocument() && ed.CurrentPos == focusedCaret && ed.Anchor == focusedAnchor, "Swipe reactivated the native input document or moved the caret");
+                gate.ResumeInput();
+                Assert(ed.Focus && HasNativeTextDocument() && !ShouldBlockGestureKeyboard(), "Hardware keyboard input could not resume after a swipe");
+                if (control == consoles[0])
+                {
+                    tab.Control.Focus(FocusState.Pointer); tab.Control.Editor.Focus = true;
+                    gate.Press(11, origin); gate.Move(11, new Windows.Foundation.Point(origin.X, origin.Y - 80)); gate.Release(11);
+                    Assert(!HasNativeTextDocument() && !tab.Control.Editor.Focus, "Scrolling another pane retained the previous editor's native input document");
+                    touchInputs.GetValue(tab.Control, _ => throw new InvalidOperationException("Touch gate missing")).ResumeInput();
+                    Assert(HasNativeTextDocument(), "Hardware input could not resume in the previously focused pane");
+                }
                 Assert(RunButton.Focus(FocusState.Programmatic), "Unable to move focus before horizontal selection");
                 long horizontalOffset = ed.XOffset, verticalOffset = ed.FirstVisibleLine;
                 gate.Press(4, origin); gate.Move(4, new Windows.Foundation.Point(origin.X + 90, origin.Y + 2)); gate.Release(4);
@@ -428,19 +463,36 @@ public sealed partial class MainWindow
             var ed = tab.Control.Editor;
             ed.SetText("def outer():\n    if True:\n        print('hello')\n    return 1\n\nprint(outer())\n"); ed.Colourise(0, -1);
             await Task.Delay(50);
-            Assert(new[] { 25, 26, 30, 31 }.All(n => (int)ed.MarkerSymbolDefined(n) == 30), "A fold header still uses a plus/minus box");
-            Assert(new[] { 27, 28, 29 }.All(n => (int)ed.MarkerSymbolDefined(n) == 9), "Fold scope lines contain repeated symbols");
+            UpdateFoldOverlay(tab);
+            Assert(S(tab.Control, 2245, 2) == 0, "Native folding markers still share a single gutter column");
+            Assert(tab.FoldTargets.Count >= 2, "Nested fold headers are missing");
+            var outer = tab.FoldTargets.Single(t => t.Line == 0);
+            var inner = tab.FoldTargets.Single(t => t.Line == 1);
+            Assert(inner.Bounds.X > outer.Bounds.X + 10, "Nested arrows do not follow indentation");
             ed.SetEmptySelection(0); ed.ScrollCaret();
             RunButton.Focus(FocusState.Programmatic);
             double scale = tab.Control.XamlRoot.RasterizationScale;
-            var point = new Windows.Foundation.Point((S(tab.Control, 2243, 0) + S(tab.Control, 2243, 1) + S(tab.Control, 2243, 2) / 2.0) / scale, ed.TextHeight(0) / scale / 2);
+            var point = new Windows.Foundation.Point(outer.Bounds.X + outer.Bounds.Width / 2, outer.Bounds.Y + outer.Bounds.Height / 2);
             var gate = touchInputs.GetValue(tab.Control, _ => throw new InvalidOperationException("Touch gate missing"));
             gate.Press(30, point); gate.Release(30);
             Assert(!ed.GetFoldExpanded(0) && !ed.GetLineVisible(1), "Chevron tap did not collapse the scope");
             gate.Press(31, point); gate.Release(31);
             Assert(ed.GetFoldExpanded(0) && ed.GetLineVisible(1), "Chevron tap did not expand the scope");
             Assert(ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Folding acquired text focus");
+            tab.Control.Focus(FocusState.Pointer); ed.Focus = true;
+            gate.Press(32, point); gate.Release(32);
+            Assert(!HasNativeTextDocument() && ShouldBlockGestureKeyboard(), "Folding an already focused editor reactivated the keyboard");
+            gate.Press(33, point); gate.Release(33);
+            UpdateFoldOverlay(tab);
+            var strokes = tab.Folds.Children.OfType<Microsoft.UI.Xaml.Shapes.Line>().Where(l => l.Visibility == Visibility.Visible).ToArray();
+            Assert(strokes.Length >= 2 && strokes.Select(l => l.X1).Distinct().Count() >= 2, "Scope guides are not drawn at each indentation level");
+            var beforeX = tab.FoldTargets.Single(t => t.Line == 1).Bounds.X;
+            ed.XOffset = 25; UpdateFoldOverlay(tab);
+            Assert(tab.FoldTargets.Single(t => t.Line == 1).Bounds.X < beforeX, "Inline fold controls do not track horizontal scrolling");
+            ed.XOffset = 0; UpdateFoldOverlay(tab);
             await Snapshot(tab.View, "fold-chevrons.png");
+            ed.InsertText(0, "# new first line\n"); ed.Colourise(0, -1); await Task.Delay(30); UpdateFoldOverlay(tab);
+            Assert(tab.FoldTargets.Any(t => t.Line == 1) && tab.FoldTargets.Any(t => t.Line == 2) && tab.FoldTargets.All(t => t.Line != 0), "Editing left stale fold hit targets or scope ranges");
         });
         await Test("breakpoints track inserted lines", async () =>
         {

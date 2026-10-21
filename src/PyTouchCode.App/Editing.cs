@@ -6,7 +6,6 @@ using PyTouchCode.Core;
 using System.Text;
 using System.Text.Json;
 using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.UI;
 using WinUIEditor;
 
@@ -60,9 +59,8 @@ public sealed partial class MainWindow
         S(control, 2021, 0); // No whitespace background markers.
         S(control, 2037, 65001); S(control, 2242, 0, terminal ? 0 : 52); S(control, 2240, 0, 1);
         S(control, 2242, 1, terminal ? 0 : 24); S(control, 2240, 1, 0); S(control, 2244, 1, 1); S(control, 2246, 1, 1);
-        S(control, 2242, 2, terminal ? 0 : 16); S(control, 2240, 2, 0); S(control, 2244, 2, unchecked((int)0xFE000000)); S(control, 2246, 2, 1);
+        S(control, 2242, 2, terminal ? 0 : (int)Math.Ceiling(20 * (control.XamlRoot?.RasterizationScale ?? 1))); S(control, 2240, 2, 0); S(control, 2244, 2, 0); S(control, 2246, 2, 0);
         S(control, 2040, 0, 0); S(control, 2042, 0, ColorRef("#E06C75")); S(control, 2040, 1, 22); S(control, 2042, 1, ColorRef(dark ? "#514A2D" : "#FFF0C2"));
-        if (!terminal) ConfigureFoldMarkers(control, palette.BrightBlack, bg);
         ed.TabWidth = settings.IndentSize; ed.UseTabs = settings.UseTabs; S(control, 2122, (ulong)settings.IndentSize);
         ed.WrapMode = (Wrap)(settings.WordWrap ? 1 : 0);
         ed.HScrollBar = true; ed.ScrollWidthTracking = true;
@@ -82,45 +80,6 @@ public sealed partial class MainWindow
             S(control, 2155, 0, 8); S(control, 2157, 0, 8);
         }
         if (!terminal) ed.SetKeyWords(0, "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield");
-    }
-    static void ConfigureFoldMarkers(EditorBaseControl control, string foreground, string background)
-    {
-        var ed = control.Editor;
-        double scale = control.XamlRoot?.RasterizationScale ?? 1;
-        int side = (int)Math.Ceiling(12 * scale);
-        ed.SetMarginWidthN(2, (int)Math.Ceiling(20 * scale));
-        for (int marker = 25; marker <= 31; marker++)
-        {
-            ed.MarkerDefine(marker, (MarkerSymbol)9); // Scope lines, never plus/minus boxes.
-            ed.MarkerSetFore(marker, ColorRef(foreground)); ed.MarkerSetBack(marker, ColorRef(background));
-            // Scintilla draws folding connector strokes using the marker's back colour.
-            if (marker is >= 27 and <= 29) { ed.MarkerSetBack(marker, ColorRef(foreground)); ed.MarkerSetBackSelected(marker, ColorRef(foreground)); }
-        }
-        byte[] Chevron(bool expanded)
-        {
-            var color = ParseColor(foreground); var pixels = new byte[side * side * 4];
-            double Segment(double x, double y, double ax, double ay, double bx, double by)
-            {
-                double dx = bx - ax, dy = by - ay, t = Math.Clamp(((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy), 0, 1);
-                return Math.Sqrt(Math.Pow(x - ax - t * dx, 2) + Math.Pow(y - ay - t * dy, 2));
-            }
-            for (int y = 0; y < side; y++) for (int x = 0; x < side; x++)
-            {
-                int coverage = 0;
-                for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++)
-                {
-                    double px = (x + (sx + .5) / 4) / scale, py = (y + (sy + .5) / 4) / scale;
-                    if (!expanded) py = 12 - py;
-                    if (Math.Min(Segment(px, py, 3, 4.5, 6, 7.5), Segment(px, py, 6, 7.5, 9, 4.5)) <= .7) coverage++;
-                }
-                int offset = (y * side + x) * 4;
-                pixels[offset] = color.R; pixels[offset + 1] = color.G; pixels[offset + 2] = color.B; pixels[offset + 3] = (byte)(coverage * 255 / 16);
-            }
-            return pixels;
-        }
-        ed.RGBAImageSetWidth(side); ed.RGBAImageSetHeight(side); ed.RGBAImageSetScale(100);
-        foreach (int marker in new[] { 25, 30 }) ed.MarkerDefineRGBAImageFromBuffer(marker, Chevron(false).AsBuffer());
-        foreach (int marker in new[] { 26, 31 }) ed.MarkerDefineRGBAImageFromBuffer(marker, Chevron(true).AsBuffer());
     }
     void AutoPairAndIndent(EditorTab tab, int character)
     {

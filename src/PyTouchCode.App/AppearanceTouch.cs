@@ -128,6 +128,8 @@ public sealed partial class MainWindow
         public FrameworkElement? Surface;
         public required Action<uint, Point> Press, Move;
         public required Action<uint> Release, Cancel;
+        public required Action ResumeInput;
+        public required Func<bool> BlockKeyboard;
     }
     readonly System.Runtime.CompilerServices.ConditionalWeakTable<EditorBaseControl, TouchInputGate> touchInputs = new();
     static FrameworkElement? EditorInputSurface(DependencyObject parent)
@@ -140,8 +142,9 @@ public sealed partial class MainWindow
         }
         return null;
     }
-    void CommitTouchTap(EditorBaseControl control, Point point, long position, Action? selectionChanged)
+    void CommitTouchTap(EditorBaseControl control, Point point, long position, Action resumeInput, Action? selectionChanged)
     {
+        if (TryToggleInlineFold(control, point)) return;
         double x = point.X * (control.XamlRoot?.RasterizationScale ?? 1);
         long edge = 0;
         for (int margin = 0; margin < 5; margin++)
@@ -151,23 +154,36 @@ public sealed partial class MainWindow
             long line = control.Editor.LineFromPosition(position);
             if (margin == 1 && documents.FirstOrDefault(t => t.Control == control) is { } tab)
                 _ = SafeAsync(() => ToggleBreakpointAsync(tab, (int)line));
-            else if (margin == 2) control.Editor.ToggleFold(line);
             return;
         }
         control.Editor.SetEmptySelection(position); control.Editor.ScrollCaret();
+        resumeInput();
         control.Focus(FocusState.Pointer);
+        control.Editor.Focus = true;
         selectionChanged?.Invoke();
     }
     void AttachTouch(EditorBaseControl control, Action? selectionChanged = null)
     {
         var pointers = new Dictionary<uint, Point>();
+        bool inputSuspended = false;
+        DateTime keyboardBlockedUntil = DateTime.MinValue;
+        void ResumeInput()
+        {
+            if (pointers.Count > 0) return;
+            inputSuspended = false;
+            keyboardBlockedUntil = DateTime.MinValue;
+            touchKeyboardGestureOwner = null;
+            if (control.FocusState != FocusState.Unfocused) control.Editor.Focus = true;
+        }
+        control.PreviewKeyDown += (_, _) => ResumeInput();
         control.GettingFocus += (_, e) =>
         {
-            if (pointers.Count > 0 && e.FocusState == FocusState.Pointer)
+            if (pointers.Count > 0 && e.FocusState != FocusState.Keyboard)
             {
                 e.Cancel = true; e.Handled = true;
             }
         };
+        control.GotFocus += (_, _) => { if (inputSuspended) control.Editor.Focus = false; };
         Point origin = default, previous = default;
         Point multiOrigin = default;
         long anchor = 0, firstLine = 0, originalAnchor = 0, originalCaret = 0, xOffset = 0;
@@ -204,7 +220,7 @@ public sealed partial class MainWindow
             {
                 var item = new MenuFlyoutItem { Text = action.Item1 }; string command = action.Item2;
                 SetUiFont(item, new FontFamily(settings.UiFont), settings.UiFontSize, settings.UiFontWeight);
-                item.Click += (_, _) => { var ed = control.Editor; switch (command) { case "select": ed.SetSel(ed.WordStartPosition(anchor, true), ed.WordEndPosition(anchor, true)); selectionChanged?.Invoke(); break; case "copy": ed.Copy(); break; case "cut": if (!ed.ReadOnly) ed.Cut(); break; case "paste": if (!ed.ReadOnly) ed.Paste(); break; case "selectall": ed.SelectAll(); selectionChanged?.Invoke(); break; } };
+                item.Click += (_, _) => { var ed = control.Editor; switch (command) { case "select": ed.SetSel(ed.WordStartPosition(anchor, true), ed.WordEndPosition(anchor, true)); selectionChanged?.Invoke(); break; case "copy": ed.Copy(); break; case "cut": if (!ed.ReadOnly) { ed.Cut(); control.Focus(FocusState.Pointer); ResumeInput(); } break; case "paste": if (!ed.ReadOnly) { ed.Paste(); control.Focus(FocusState.Pointer); ResumeInput(); } break; case "selectall": ed.SelectAll(); selectionChanged?.Invoke(); break; } };
                 menu.Items.Add(item);
             }
             menu.ShowAt(control, new FlyoutShowOptions { Position = origin }); direction = "hold";
@@ -219,7 +235,14 @@ public sealed partial class MainWindow
         };
         void Press(uint id, Point point)
         {
+            // XAML focus can stay on the editor after the keyboard was dismissed.
+            // SCI_SETFOCUS also detaches its TSF document, unlike GettingFocus alone.
+            inputSuspended = true;
+            touchKeyboardGestureOwner = control;
+            foreach (var editor in documents.Select(t => t.Control).Concat(consoles))
+                if (editor.IsLoaded && editor.Editor.Focus) editor.Editor.Focus = false;
             inertia.Stop(); pointers[id] = point; hold.Stop();
+            EnsureTouchKeyboardGuard();
             if (pointers.Count == 1)
             {
                 origin = previous = point; direction = ""; velocity = remainder = 0; lastMove = DateTime.UtcNow;
@@ -234,6 +257,7 @@ public sealed partial class MainWindow
                 firstLine = control.Editor.FirstVisibleLine; xOffset = control.Editor.XOffset;
                 PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, 0, 0);
                 initialFont = consoles.Contains(control) ? settings.TerminalFontSize : settings.EditorFontSize; direction = "multi"; zooming = false;
+                HideGestureKeyboard();
             }
             else if (pointers.Count > 2) { multiFrame.Stop(); direction = "multi"; }
         }
@@ -251,7 +275,7 @@ public sealed partial class MainWindow
             }
             if (direction == "multi") return;
             double dx = point.X - origin.X, dy = point.Y - origin.Y;
-            if (direction.Length == 0 && Math.Sqrt(dx * dx + dy * dy) >= 8) { direction = Math.Abs(dx) > Math.Abs(dy) * 1.25 ? "select" : "scroll"; hold.Stop(); }
+            if (direction.Length == 0 && Math.Sqrt(dx * dx + dy * dy) >= 8) { direction = Math.Abs(dx) > Math.Abs(dy) * 1.25 ? "select" : "scroll"; hold.Stop(); HideGestureKeyboard(); }
             double scale = control.XamlRoot.RasterizationScale;
             if (direction == "scroll")
             {
@@ -273,14 +297,23 @@ public sealed partial class MainWindow
             if (!pointers.Remove(id)) return; hold.Stop();
             if (pointers.Count == 0)
             {
-                if (direction.Length == 0) CommitTouchTap(control, origin, anchor, selectionChanged);
+                keyboardBlockedUntil = DateTime.UtcNow.AddMilliseconds(600);
+                if (direction.Length == 0)
+                {
+                    CommitTouchTap(control, origin, anchor, () =>
+                    {
+                        inputSuspended = false; keyboardBlockedUntil = DateTime.MinValue; touchKeyboardGestureOwner = null;
+                    }, selectionChanged);
+                    if (inputSuspended) HideGestureKeyboard();
+                }
                 if (direction == "scroll") PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, 0, previous.Y - origin.Y);
                 if (direction == "scroll" && new Windows.UI.ViewManagement.UISettings().AnimationsEnabled) inertia.Start();
                 if (direction == "multi" && zooming) _ = SafeAsync(async () => { ApplyAppearance(); await store.SaveAsync(settings); });
             }
         }
-        void Cancel(uint id) { if (!pointers.Remove(id)) return; hold.Stop(); inertia.Stop(); multiFrame.Stop(); direction = "multi"; }
-        var gate = new TouchInputGate { Press = Press, Move = Move, Release = Release, Cancel = Cancel };
+        void Cancel(uint id) { if (!pointers.Remove(id)) return; hold.Stop(); inertia.Stop(); multiFrame.Stop(); direction = "multi"; keyboardBlockedUntil = DateTime.UtcNow.AddMilliseconds(600); }
+        var gate = new TouchInputGate { Press = Press, Move = Move, Release = Release, Cancel = Cancel, ResumeInput = ResumeInput, BlockKeyboard = () => inputSuspended && (pointers.Count > 0 || DateTime.UtcNow < keyboardBlockedUntil) };
+        long? mouseFold = null; uint mousePointer = 0;
         touchInputs.Add(control, gate);
         void BindSurface()
         {
@@ -291,28 +324,41 @@ public sealed partial class MainWindow
             gate.Surface = surface; surface.IsHoldingEnabled = false;
             surface.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
             {
-                if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch) return;
+                if (e.Pointer.PointerDeviceType != PointerDeviceType.Touch)
+                {
+                    if (e.GetCurrentPoint(control).Properties.IsLeftButtonPressed && HitInlineFold(control, e.GetCurrentPoint(control).Position) is { } line)
+                    { mouseFold = line; mousePointer = e.Pointer.PointerId; surface.CapturePointer(e.Pointer); e.Handled = true; }
+                    else ResumeInput();
+                    return;
+                }
                 gate.Press(e.Pointer.PointerId, e.GetCurrentPoint(control).Position);
                 surface.CapturePointer(e.Pointer); e.Handled = true;
             }), true);
             surface.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler((_, e) =>
             {
+                if (mouseFold is not null && mousePointer == e.Pointer.PointerId) { e.Handled = true; return; }
                 if (!pointers.ContainsKey(e.Pointer.PointerId)) return;
                 gate.Move(e.Pointer.PointerId, e.GetCurrentPoint(control).Position); e.Handled = true;
             }), true);
             surface.AddHandler(UIElement.PointerReleasedEvent, new PointerEventHandler((_, e) =>
             {
+                if (mouseFold is { } fold && mousePointer == e.Pointer.PointerId)
+                {
+                    mouseFold = null;
+                    if (HitInlineFold(control, e.GetCurrentPoint(control).Position) == fold) ToggleInlineFold(control, fold);
+                    surface.ReleasePointerCapture(e.Pointer); e.Handled = true; return;
+                }
                 if (!pointers.ContainsKey(e.Pointer.PointerId)) return;
                 gate.Move(e.Pointer.PointerId, e.GetCurrentPoint(control).Position);
                 gate.Release(e.Pointer.PointerId); surface.ReleasePointerCapture(e.Pointer); e.Handled = true;
             }), true);
             surface.PointerCanceled += (_, e) => gate.Cancel(e.Pointer.PointerId);
-            surface.PointerCaptureLost += (_, e) => gate.Cancel(e.Pointer.PointerId);
+            surface.PointerCaptureLost += (_, e) => { if (mousePointer == e.Pointer.PointerId) mouseFold = null; gate.Cancel(e.Pointer.PointerId); };
         }
         control.Loaded += (_, _) => BindSurface();
         control.LayoutUpdated += (_, _) => { if (gate.Surface is null || !gate.Surface.IsLoaded) BindSurface(); };
         if (control.IsLoaded) BindSurface();
-        control.Unloaded += (_, _) => { hold.Stop(); inertia.Stop(); multiFrame.Stop(); pointers.Clear(); };
+        control.Unloaded += (_, _) => { hold.Stop(); inertia.Stop(); multiFrame.Stop(); pointers.Clear(); if (ReferenceEquals(touchKeyboardGestureOwner, control)) touchKeyboardGestureOwner = null; };
     }
 }
 
