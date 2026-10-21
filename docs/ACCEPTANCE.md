@@ -1,16 +1,16 @@
 # 验收记录
 
-版本 0.1.5.3。验证日期 2026-10-21，Windows 10 19045 x64，200% 缩放。
+版本 0.1.5.4。验证日期 2026-10-21，Windows 10 19045 x64，200% 缩放。
 
 | 项目 | 结果 | 记录 |
 | --- | --- | --- |
-| Release x64 构建 | 0 warning，0 error | `artifacts/revision-0153-package.log` |
-| 核心测试 | 28 项通过 | `artifacts/revision-0153-build.log` |
-| 便携版应用测试 | 36 项通过 | `artifacts/revision-0153-ui.log` |
-| MSIX 升级及开始菜单激活 | 36 项通过 | `artifacts/revision-0153-msix.log` |
+| Release x64 构建 | 0 warning，0 error | `artifacts/revision-0154-package.log` |
+| 核心测试 | 28 项通过 | `artifacts/revision-0154-build.log` |
+| 便携版应用测试 | 37 项通过 | `artifacts/revision-0154-ui.log` |
+| MSIX 升级、默认缓存及实机 Pyboard | 38 项通过 | `artifacts/revision-0154-msix.log` |
 
-串口枚举改用 Windows SetupAPI 和系统串口映射，不启动 Python，也不打开串口。保留设备名称、硬件 ID、端口去重和排序。设备面板支持扫描取消，并统一使用结构化端口数据，避免从显示文字解析端口。
+默认数据目录改为 MSIX LocalCache 的真实物理目录，继续读取原有配置与运行环境。此前保存的应用内部解释器路径会映射到同一缓存的真实路径，外部解释器路径保持原值。新增默认缓存 Python 的 DLL 启动及语言服务诊断请求检查，避免只验证工作区临时环境。
 
-界面测试实际执行解释器入口的扫描按钮及设备面板的打开扫描，并把两个入口的 Python 路径设为不存在的文件，确认扫描不依赖解释器。扫描记录 `serial-discovery.json`，本机结果为 COM1、COM3、COM4、COM5；渲染图包括 `interpreter-micropython.png` 和 `device-serial-scan.png`。保留原有编辑、终端、配色、字体及动画检查。
+COM5 实机为 PYBv1.1_CN / STM32F405RG，MicroPython 1.18。安装版使用默认缓存 Python，通过 mpremote 查询板卡信息、在 RAM 运行本地测试脚本并得到 42，再经应用的设备 REPL 输入命令并得到 42。测试前后 boot.py、main.py 的 SHA256 相同。硬件记录保存在 `pyboard-hardware.json`，默认缓存记录为 `profile-runtime.json`。
 
-本次未向开发板发送指令或写入文件。Surface 物理触摸和 Windows 11 Mica 效果仍待实机验证。
+硬件测试仅在显式传入 `scripts/Test-MSIX.ps1 -PyboardPort COM5` 时执行；普通界面测试和 CI 不会连接开发板。保留串口扫描、编辑、终端、字体、配色与动画验证。

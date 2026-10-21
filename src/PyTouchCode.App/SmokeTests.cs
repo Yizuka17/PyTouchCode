@@ -17,6 +17,7 @@ public sealed partial class MainWindow
     {
         Directory.CreateDirectory(directory);
         var results = new List<object>(); int failures = 0;
+        string? profilePython = null;
         async Task Test(string name, Func<Task> action)
         {
             try { await action(); results.Add(new { name, passed = true }); }
@@ -426,6 +427,16 @@ public sealed partial class MainWindow
             Assert(Path.GetDirectoryName(repaired) != broken && File.Exists(Path.Combine(broken, "python.exe")), "Repair replaced the incomplete cache in place");
             Assert(await PythonEnvironments.ProbeAsync(repaired) is not null, "Repaired Python cannot start");
         });
+        await Test("default profile runtime loads DLLs and runs the language service", async () =>
+        {
+            profilePython = await new RuntimeUpdates(AppDataPaths.Directory).EnsureBundledAsync();
+            Assert(profilePython is not null && await PythonEnvironments.ProbeAsync(profilePython) is not null, "Default profile Python cannot load its DLLs");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await using var service = new LanguageService();
+            var response = await service.RequestAsync(profilePython!, Bridge, new { action = "diagnose", source = "answer = 42", line = 1, column = 11 }, timeout.Token);
+            Assert(response.TryGetProperty("diagnostics", out _), "Default profile language service failed");
+            await File.WriteAllTextAsync(Path.Combine(directory, "profile-runtime.json"), JsonSerializer.Serialize(new { directory = AppDataPaths.Directory, python = profilePython, diagnostics = response }, SettingsStore.JsonOptions));
+        });
         await Test("native serial discovery is independent of the Python interpreter", async () =>
         {
             var ports = await SerialDevices.DiscoverAsync();
@@ -576,6 +587,40 @@ public sealed partial class MainWindow
             ShowSidebar(false); Assert(SidebarWidth.Width.Value == 0, "Sidebar did not collapse"); ShowSidebar(true);
             await store.SaveAsync(settings); var loaded = await store.LoadAsync(); Assert(loaded.EditorFont == "Consolas" && loaded.EditorFontSize == 17, "UI settings failed to persist");
         });
+        var commandArgs = Environment.GetCommandLineArgs(); int boardIndex = Array.IndexOf(commandArgs, "--pyboard-test");
+        if (boardIndex >= 0 && boardIndex + 1 < commandArgs.Length)
+            await Test("physical Pyboard executes RAM code and accepts inline REPL through the profile runtime", async () =>
+            {
+                string port = SerialDevices.ValidatePort(commandArgs[boardIndex + 1]);
+                string? oldBundled = bundled; string oldInterpreter = settings.Interpreter, oldTarget = settings.ExecutionTarget, oldPort = settings.DevicePort;
+                bundled = profilePython ?? await new RuntimeUpdates(AppDataPaths.Directory).EnsureBundledAsync();
+                const string identify = "import os,sys,json,uhashlib,ubinascii;print(json.dumps({'machine':str(os.uname()),'platform':sys.platform,'hashes':{n:ubinascii.hexlify(uhashlib.sha256(open(n,'rb').read()).digest()).decode() for n in ('boot.py','main.py')}}))";
+                try
+                {
+                    string before = (await MpRemoteAsync(port, "resume", "exec", identify)).Trim();
+                    using var info = JsonDocument.Parse(before);
+                    Assert(info.RootElement.GetProperty("platform").GetString() == "pyboard", "Selected device is not a Pyboard");
+                    string script = Path.Combine(directory, "pyboard-ram-probe.py");
+                    await File.WriteAllTextAsync(script, "print('PTC_RAM_PROBE', 6 * 7)\n");
+                    string run = await MpRemoteAsync(port, "resume", "run", script);
+                    Assert(run.Contains("PTC_RAM_PROBE 42"), "RAM execution did not return the expected result");
+                    ClearTerminal(3); await ConnectDeviceAsync(port); await Wait(() => device.IsRunning);
+                    await device.SendAsync(JsonSerializer.Serialize(new { control = 3 }));
+                    await Wait(() => { FlushOutput(); return consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains(">>>"); });
+                    ReplaceTerminalDraft(3, "print('PTC_REPL_PROBE', 6 * 7)"); await SubmitTerminalAsync(3);
+                    await Wait(() => { FlushOutput(); return consoles[3].Editor.GetText(consoles[3].Editor.Length + 1).Contains("PTC_REPL_PROBE 42"); });
+                    string transcript = consoles[3].Editor.GetText(consoles[3].Editor.Length + 1);
+                    await WaitStoppedAsync(device); deviceRepl = false;
+                    string after = (await MpRemoteAsync(port, "resume", "exec", identify)).Trim();
+                    Assert(before == after, "Board identification or boot.py/main.py hashes changed");
+                    await File.WriteAllTextAsync(Path.Combine(directory, "pyboard-hardware.json"), JsonSerializer.Serialize(new { port, python = bundled, identification = info.RootElement, ram = run, repl = transcript, filesUnchanged = true }, SettingsStore.JsonOptions));
+                }
+                finally
+                {
+                    await WaitStoppedAsync(device); deviceRepl = false; bundled = oldBundled;
+                    settings.Interpreter = oldInterpreter; settings.ExecutionTarget = oldTarget; settings.DevicePort = oldPort; selectedPort = oldPort; UpdateInterpreter();
+                }
+            });
         await File.WriteAllTextAsync(Path.Combine(directory, "ui-smoke.json"), JsonSerializer.Serialize(new { passed = results.Count - failures, failed = failures, viewport = new { width = Root.ActualWidth, height = Root.ActualHeight }, results }, SettingsStore.JsonOptions));
         runner.Stop(); shell.Stop(); repl.Stop(); device.Stop(); language.Stop(); closing = true; Close();
     }

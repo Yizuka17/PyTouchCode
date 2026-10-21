@@ -1,8 +1,9 @@
-param([string]$Package)
+param([string]$Package, [string]$PyboardPort)
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSEdition -ne 'Desktop') {
     $arguments = @('-NoLogo', '-NoProfile', '-File', $PSCommandPath)
     if ($Package) { $arguments += @('-Package', $Package) }
+    if ($PyboardPort) { $arguments += @('-PyboardPort', $PyboardPort) }
     & "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe" @arguments
     if ($LASTEXITCODE) { throw 'Installed MSIX test failed.' }
     return
@@ -27,7 +28,12 @@ public static class PackageActivation {
     }
 }
 '@
-$processId = [PackageActivation]::Launch(($installed.PackageFamilyName + '!App'), ('--smoke-test "' + $directory + '"'))
+$activationArguments = '--smoke-test "' + $directory + '"'
+if ($PyboardPort) {
+    if ($PyboardPort -notmatch '^COM[1-9][0-9]*$') { throw 'Invalid Pyboard COM port.' }
+    $activationArguments += ' --pyboard-test ' + $PyboardPort
+}
+$processId = [PackageActivation]::Launch(($installed.PackageFamilyName + '!App'), $activationArguments)
 $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
 if ($process -and !$process.WaitForExit(120000)) { throw "Installed smoke test timed out: $directory" }
 $report = Get-Content -LiteralPath (Join-Path $directory 'ui-smoke.json') -Raw | ConvertFrom-Json

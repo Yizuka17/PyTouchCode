@@ -16,7 +16,7 @@ public sealed partial class MainWindow : Window
     static string? CommandDirectory(string option) { var args = Environment.GetCommandLineArgs(); int index = Array.IndexOf(args, option); return index >= 0 && index + 1 < args.Length ? Path.GetFullPath(args[index + 1]) : null; }
     static string? SmokeDirectory => CommandDirectory("--smoke-test");
     static string? PreviewDirectory => CommandDirectory("--preview-directory");
-    readonly SettingsStore store = new(SmokeDirectory is { } smoke ? Path.Combine(smoke, "settings") : PreviewDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PyTouchCode"));
+    readonly SettingsStore store = new(SmokeDirectory is { } smoke ? Path.Combine(smoke, "settings") : PreviewDirectory ?? AppDataPaths.Directory);
     AppSettings settings = new();
     readonly ProcessSession runner = new(), shell = new(), repl = new(), device = new(), maintenance = new();
     readonly LanguageService language = new();
@@ -88,6 +88,7 @@ public sealed partial class MainWindow : Window
         {
             if (SmokeDirectory is null && PreviewDirectory is null) await AppDataMigration.MigrateAsync(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
             settings = await store.LoadAsync();
+            settings.Interpreter = AppDataPaths.ResolveInterpreter(settings.Interpreter);
         }
         catch (Exception e) { Notify("配置未加载：" + e.Message + " 原文件已保留，请修复配置后重新启动。"); return; }
         App.StartupPhase = "Appearance"; ApplyAppearance();
