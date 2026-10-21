@@ -479,6 +479,10 @@ public sealed partial class MainWindow
             gate.Press(31, point); gate.Release(31);
             Assert(ed.GetFoldExpanded(0) && ed.GetLineVisible(1), "Chevron tap did not expand the scope");
             Assert(ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(Root.XamlRoot), RunButton), "Folding acquired text focus");
+            tab.Control.Focus(FocusState.Pointer); ed.Focus = true;
+            gate.Press(32, point); gate.Release(32);
+            Assert(!HasNativeTextDocument() && ShouldBlockGestureKeyboard(), "Folding an already focused editor reactivated the keyboard");
+            gate.Press(33, point); gate.Release(33);
             UpdateFoldOverlay(tab);
             var strokes = tab.Folds.Children.OfType<Microsoft.UI.Xaml.Shapes.Line>().Where(l => l.Visibility == Visibility.Visible).ToArray();
             Assert(strokes.Length >= 2 && strokes.Select(l => l.X1).Distinct().Count() >= 2, "Scope guides are not drawn at each indentation level");

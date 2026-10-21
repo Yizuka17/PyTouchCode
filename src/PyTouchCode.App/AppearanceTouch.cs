@@ -142,7 +142,7 @@ public sealed partial class MainWindow
         }
         return null;
     }
-    void CommitTouchTap(EditorBaseControl control, Point point, long position, Action? selectionChanged)
+    void CommitTouchTap(EditorBaseControl control, Point point, long position, Action resumeInput, Action? selectionChanged)
     {
         if (TryToggleInlineFold(control, point)) return;
         double x = point.X * (control.XamlRoot?.RasterizationScale ?? 1);
@@ -157,7 +157,7 @@ public sealed partial class MainWindow
             return;
         }
         control.Editor.SetEmptySelection(position); control.Editor.ScrollCaret();
-        touchKeyboardGestureOwner = null;
+        resumeInput();
         control.Focus(FocusState.Pointer);
         control.Editor.Focus = true;
         selectionChanged?.Invoke();
@@ -298,7 +298,14 @@ public sealed partial class MainWindow
             if (pointers.Count == 0)
             {
                 keyboardBlockedUntil = DateTime.UtcNow.AddMilliseconds(600);
-                if (direction.Length == 0) { inputSuspended = false; keyboardBlockedUntil = DateTime.MinValue; CommitTouchTap(control, origin, anchor, selectionChanged); }
+                if (direction.Length == 0)
+                {
+                    CommitTouchTap(control, origin, anchor, () =>
+                    {
+                        inputSuspended = false; keyboardBlockedUntil = DateTime.MinValue; touchKeyboardGestureOwner = null;
+                    }, selectionChanged);
+                    if (inputSuspended) HideGestureKeyboard();
+                }
                 if (direction == "scroll") PanTouch(control, originalAnchor, originalCaret, firstLine, xOffset, 0, previous.Y - origin.Y);
                 if (direction == "scroll" && new Windows.UI.ViewManagement.UISettings().AnimationsEnabled) inertia.Start();
                 if (direction == "multi" && zooming) _ = SafeAsync(async () => { ApplyAppearance(); await store.SaveAsync(settings); });
