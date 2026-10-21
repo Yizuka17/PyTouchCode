@@ -1,15 +1,19 @@
 # 验收记录
 
-版本 0.1.5.7。验证日期 2026-10-21，Windows 10 19045 x64，200% 缩放。
+版本 0.1.5.8。验证日期 2026-10-21，Windows 10 19045 x64，200% 缩放。
 
 | 项目 | 结果 | 记录 |
 | --- | --- | --- |
-| Release x64 构建 | 0 warning，0 error | `artifacts/revision-0157-package.log` |
-| 核心测试 | 28 项通过 | `artifacts/revision-0157-build.log` |
-| 便携版应用及实机 Pyboard | 38 项通过 | `artifacts/revision-0157-portable.log` |
-| MSIX 升级、默认缓存及实机 Pyboard | 38 项通过 | `artifacts/revision-0157-msix.log` |
+| Release x64 构建 | 0 warning，0 error | `artifacts/revision-0158-package.log` |
+| 核心测试 | 28 项通过 | `artifacts/revision-0158-build.log` |
+| 便携版应用 | 39 项通过 | `artifacts/revision-0158-portable.log` |
+| MSIX 升级、默认缓存及应用 | 39 项通过 | `artifacts/revision-0158-msix.log` |
 
-COM5 实机为 PYBv1.1_CN / STM32F405RG，MicroPython 1.18。通过应用运行菜单执行 USB 盘 H: 上已保存的 main.py，确认首次运行持续执行、状态正确且未弹出错误。另用 RAM 测试程序验证重复运行不终止当前任务、停止后恢复 REPL、重新运行、无输出进程异常退出时显示退出代码、板卡异常保留 traceback，以及终端直接输入得到 42。测试前后 boot.py、main.py 的 SHA256 相同。
+编辑器和终端在渲染子控件接收触摸，先区分手势，再于确认点按时定位光标和获取输入焦点。回归测试使用实际控件的共用手势入口，验证按下与纵向滚动不抢焦点、不移光标，横向拖动只选字，双指等距移动全向滚动且不缩放，捏合只改变字号、不改变选区，取消或结束双指手势不误触发单指选中。长行使用水平滚动条；自动换行选项同时作用于代码和终端。尚未进行 Surface 实体触摸验证。
+
+折叠头使用按 DPI 绘制的上下箭头，范围内仅保留竖线。已验证箭头点按折叠/展开、不获取编辑焦点，以及真实渲染图中的箭头和范围线。
+
+此前 0.1.5.7 已通过 COM5 实机测试，板卡为 PYBv1.1_CN / STM32F405RG，MicroPython 1.18。测试包含 H: 盘 main.py 首次运行、持续执行、停止重跑、异常详情及 REPL 输入得到 42，测试前后 boot.py、main.py 的 SHA256 相同。本次触摸修复验证期间板卡未连接，未重复硬件测试。
 
 执行前将脚本复制到本机缓存，避免软重启影响板载 USB 盘。主动停止与异常退出分别处理，长时间运行时只保留最近的错误输出，设备操作记录在数据目录的 device.log。
 
