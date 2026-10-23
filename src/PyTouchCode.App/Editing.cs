@@ -81,6 +81,33 @@ public sealed partial class MainWindow
         }
         if (!terminal) ed.SetKeyWords(0, "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield");
     }
+    bool BackspaceIndent(EditorBaseControl control)
+    {
+        var ed = control.Editor;
+        if (ed.ReadOnly || ed.Selections != 1 || ed.SelectionStart != ed.SelectionEnd) return false;
+        long caret = ed.CurrentPos, line = ed.LineFromPosition(caret), start = ed.PositionFromLine(line);
+        if (caret <= start) return false;
+        string text = ed.GetLine(line);
+        int prefix = (int)(caret - start);
+        // Only ASCII indentation precedes the caret, so character and UTF-8 offsets agree.
+        if (prefix > text.Length || text.Take(prefix).Any(c => c is not (' ' or '\t'))) return false;
+        int column = (int)ed.GetColumn(caret), step = Math.Max(1, settings.IndentSize);
+        int targetColumn = (column - 1) / step * step;
+        int offset = 0, width = 0;
+        while (offset < prefix)
+        {
+            int next = text[offset] == '\t' ? (width / ed.TabWidth + 1) * ed.TabWidth : width + 1;
+            if (next > targetColumn) break;
+            width = next; offset++;
+        }
+        // Native unindent uses the whole line and moves to its new indent end.
+        // Delete only the prefix before the caret, including when it sits inside an indent.
+        ed.BeginUndoAction();
+        try { ed.SetSel(start + offset, caret); ed.ReplaceSel(""); }
+        finally { ed.EndUndoAction(); }
+        ed.ScrollCaret();
+        return true;
+    }
     void AutoPairAndIndent(EditorTab tab, int character)
     {
         if (tab.Loading) return;
@@ -99,6 +126,7 @@ public sealed partial class MainWindow
         }
         else if (character is '(' or '[' or '{' or '\'' or '"')
         {
+            if (!settings.AutoCloseBrackets) return;
             // Avoid pairing inside comments/strings or before an identifier.
             int style = ed.GetStyleAt(Math.Max(0, pos - 2));
             if (style is 1 or 3 or 4 or 6 or 7 or 12) return;

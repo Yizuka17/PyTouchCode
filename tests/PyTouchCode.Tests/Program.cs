@@ -117,9 +117,10 @@ await Test("Corrupt workspace records are preserved instead of overwritten", asy
 await Test("Settings persist and validate", async () =>
 {
     var store = new SettingsStore(Path.Combine(temporary, "settings"));
-    var settings = new AppSettings { Theme = "Dark", Interpreter = python, EditorFontSize = 999, OnlineUpdates = false };
+    var settings = new AppSettings { Theme = "Dark", Interpreter = python, EditorFontSize = 999, OnlineUpdates = false, AutoCloseBrackets = false };
     await store.SaveAsync(settings); var loaded = await store.LoadAsync();
     Assert(loaded.Theme == "Dark" && loaded.Interpreter == python && loaded.EditorFontSize == 40 && !loaded.OnlineUpdates, "Settings lost data");
+    Assert(!loaded.AutoCloseBrackets, "Disabled bracket pairing was not saved");
     await File.WriteAllTextAsync(store.FilePath, "{broken"); await Throws<JsonException>(() => store.LoadAsync());
     Assert(await File.ReadAllTextAsync(store.FilePath) == "{broken", "Corrupt configuration overwritten");
     await Throws<IOException>(() => store.SaveAsync(new AppSettings()));
@@ -132,6 +133,7 @@ await Test("Scheme catalog and old settings remain compatible", async () =>
     await File.WriteAllTextAsync(store.FilePath, "{\"SchemaVersion\":1,\"Theme\":\"Dark\",\"EditorFont\":\"Consolas\"}");
     var loaded = await store.LoadAsync();
     Assert(loaded.EditorDarkScheme == "One Half Dark" && loaded.TerminalLightScheme == "One Half Light" && loaded.EditorFontWeight == 400, "Older preferences lost their defaults");
+    Assert(loaded.AutoCloseBrackets, "Older settings must preserve enabled bracket pairing");
 });
 await Test("Independent palettes, font weights and custom colors round trip", async () =>
 {
