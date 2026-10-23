@@ -247,6 +247,28 @@ public sealed partial class MainWindow
             Assert(ed.GetText(ed.Length + 1).EndsWith("    "), "Indentation missing");
             ed.SetText("("); ed.GotoPos(1); AutoPairAndIndent(tab, '('); Assert(ed.GetText(ed.Length + 1) == "()", "Bracket pair missing"); return Task.CompletedTask;
         });
+        await Test("bracket pairing can be disabled without disabling indentation", () =>
+        {
+            var ed = tab.Control.Editor; bool original = settings.AutoCloseBrackets;
+            try
+            {
+                foreach (bool enabled in new[] { false, true })
+                {
+                    settings.AutoCloseBrackets = enabled;
+                    foreach (var pair in new[] { ('(', ')'), ('[', ']'), ('{', '}'), ('\'', '\''), ('"', '"') })
+                    {
+                        string text = "value = " + pair.Item1;
+                        ed.SetText(text); ed.SetEmptySelection(ed.Length); AutoPairAndIndent(tab, pair.Item1);
+                        Assert(ed.GetText(ed.Length + 1) == text + (enabled ? pair.Item2.ToString() : ""), "Pair setting was ignored");
+                        Assert(ed.CurrentPos == text.Length, "Pair setting moved the caret");
+                    }
+                    ed.SetText("def outer():\n"); ed.GotoPos(ed.Length); AutoPairAndIndent(tab, '\n');
+                    Assert(ed.GetLine(1) == new string(' ', settings.IndentSize), "Pair setting disabled newline indentation");
+                }
+            }
+            finally { settings.AutoCloseBrackets = original; }
+            return Task.CompletedTask;
+        });
         await Test("backspace removes auto indentation to column zero between functions", () =>
         {
             var ed = tab.Control.Editor; bool tabs = settings.UseTabs; int size = settings.IndentSize;
@@ -819,7 +841,7 @@ public sealed partial class MainWindow
                 for (int n = 0; n < VisualTreeHelper.GetChildrenCount(root); n++)
                     foreach (var child in Elements<T>(VisualTreeHelper.GetChild(root, n))) yield return child;
             }
-            string originalTheme = settings.Theme; double originalTransparency = settings.MaterialTransparency;
+            string originalTheme = settings.Theme; double originalTransparency = settings.MaterialTransparency; bool originalPairs = settings.AutoCloseBrackets;
             var opening = SettingsDialogAsync(); ContentDialog? dialog = null;
             await Wait(() => { dialog = VisualTreeHelper.GetOpenPopupsForXamlRoot(Root.XamlRoot).Where(p => p.Child is not null).SelectMany(p => Elements<ContentDialog>(p.Child)).FirstOrDefault(); return dialog is not null; });
             try
@@ -835,6 +857,13 @@ public sealed partial class MainWindow
                 foreach (var item in navigation.MenuItems.Cast<NavigationViewItem>().Skip(1))
                 {
                     navigation.SelectedItem = item; await Wait(() => ReferenceEquals(((ContentControl)navigation.Tag).Content, item.Tag));
+                    if (item.Content as string == "编辑器")
+                    {
+                        await Wait(() => Elements<CheckBox>(dialog!).Any(c => c.Content as string == "自动补全括号和引号"));
+                        var pairs = Elements<CheckBox>(dialog!).First(c => c.Content as string == "自动补全括号和引号");
+                        Assert(pairs.IsChecked == originalPairs, "Pair setting has the wrong initial value");
+                        pairs.IsChecked = !originalPairs;
+                    }
                 }
                 navigation.SelectedItem = navigation.MenuItems[0];
                 await Wait(() => ReferenceEquals(((ContentControl)navigation.Tag).Content, ((NavigationViewItem)navigation.MenuItems[0]).Tag));
@@ -843,6 +872,7 @@ public sealed partial class MainWindow
             }
             finally { dialog!.Hide(); await opening; }
             Assert(settings.Theme == originalTheme, "Cancel saved staged settings");
+            Assert(settings.AutoCloseBrackets == originalPairs, "Cancel saved bracket pairing changes");
             Assert(settings.MaterialTransparency == originalTransparency && (SystemBackdrop is not AdjustableBackdrop backdrop || backdrop.Transparency == originalTransparency), "Cancel did not restore material transparency");
         });
         await Test("lazy file tree", async () =>

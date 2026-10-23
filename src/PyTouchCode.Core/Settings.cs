@@ -43,6 +43,7 @@ public sealed class AppSettings
     public string Workspace { get; set; } = "";
     public bool Completion { get; set; } = true;
     public bool GhostText { get; set; } = true;
+    public bool AutoCloseBrackets { get; set; } = true;
     public bool OnlineUpdates { get; set; }
     public string ConfigurationUrl { get; set; } = "";
 

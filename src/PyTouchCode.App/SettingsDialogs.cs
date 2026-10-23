@@ -40,12 +40,13 @@ public sealed partial class MainWindow
         var schemes = new SchemeSettings(settings);
         var indent = Number("缩进宽度", settings.IndentSize, 1, 8); var tabs = Check("使用 Tab 缩进", settings.UseTabs); var wrap = Check("代码自动换行", settings.WordWrap);
         var complete = Check("离线补全与语法诊断", settings.Completion); var ghost = Check("灰色行内预测（Tab 接受）", settings.GhostText);
+        var pairs = Check("自动补全括号和引号", settings.AutoCloseBrackets);
         var shellPath = Field("Shell 路径", settings.Shell); var profile = Check("允许加载 PowerShell Profile", settings.EnableShellProfile);
         var shellArgs = Field("附加启动参数（JSON 数组）", JsonSerializer.Serialize(settings.ShellArguments));
         var env = Field("进程环境变量（JSON 对象）", JsonSerializer.Serialize(settings.Environment)); env.AcceptsReturn = true; env.MinHeight = 80;
         var editorPalette = ColorSchemes.ForEditor(settings, Root.ActualTheme == ElementTheme.Dark); var terminalPalette = ColorSchemes.ForTerminal(settings, Root.ActualTheme == ElementTheme.Dark);
         Add(appearance, theme, material, transparency, systemAccent, accent, uiFont, uiSize, uiWeight, FontPreview(uiFont, uiSize, uiWeight, editorPalette));
-        Add(editor, editorFont, editorSize, editorWeight, editorHeight, FontPreview(editorFont, editorSize, editorWeight, editorPalette, editorHeight), indent, tabs, wrap, complete, ghost);
+        Add(editor, editorFont, editorSize, editorWeight, editorHeight, FontPreview(editorFont, editorSize, editorWeight, editorPalette, editorHeight), indent, tabs, wrap, pairs, complete, ghost);
         Add(terminal, terminalFont, terminalSize, terminalWeight, terminalHeight, FontPreview(terminalFont, terminalSize, terminalWeight, terminalPalette, terminalHeight), shellPath, profile, shellArgs, env);
         var navigation = NavigationTabs(("外观", Scroll(appearance)), ("配色方案", Scroll(schemes.View)), ("编辑器", Scroll(editor)), ("终端", Scroll(terminal)));
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap }; var panel = Form(); Add(panel, navigation, error);
@@ -70,6 +71,7 @@ public sealed partial class MainWindow
                 candidate.EditorFontWeight = FontWeightValue(editorWeight); candidate.TerminalFontWeight = FontWeightValue(terminalWeight);
                 candidate.EditorLineHeight = editorHeight.Value; candidate.TerminalLineHeight = terminalHeight.Value;
                 candidate.UseTabs = tabs.IsChecked == true; candidate.WordWrap = wrap.IsChecked == true; candidate.Completion = complete.IsChecked == true; candidate.GhostText = ghost.IsChecked == true;
+                candidate.AutoCloseBrackets = pairs.IsChecked == true;
                 candidate.Shell = shellPath.Text.Trim(); candidate.EnableShellProfile = profile.IsChecked == true; candidate.ShellArguments = arguments; candidate.Environment = variables;
                 schemes.Apply(candidate); candidate.Validate(); accepted = candidate;
             }
@@ -234,6 +236,7 @@ public sealed partial class MainWindow
             settings.TerminalDarkScheme = fetched.TerminalDarkScheme; settings.TerminalLightScheme = fetched.TerminalLightScheme;
             settings.CustomColorSchemes = fetched.CustomColorSchemes.Select(s => s.Clone()).ToList();
             settings.TerminalFont = fetched.TerminalFont; settings.TerminalFontSize = fetched.TerminalFontSize; settings.IndentSize = fetched.IndentSize; settings.UseTabs = fetched.UseTabs; settings.WordWrap = fetched.WordWrap;
+            settings.AutoCloseBrackets = fetched.AutoCloseBrackets;
             ApplyAppearance(); await store.SaveAsync(settings); status.Text = "配置已应用并保存。"; apply.IsEnabled = false;
         });
         Add(panel, enabled, check, runtime, tools, ml, source, fetch, apply, status);

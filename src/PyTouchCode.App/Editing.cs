@@ -126,6 +126,7 @@ public sealed partial class MainWindow
         }
         else if (character is '(' or '[' or '{' or '\'' or '"')
         {
+            if (!settings.AutoCloseBrackets) return;
             // Avoid pairing inside comments/strings or before an identifier.
             int style = ed.GetStyleAt(Math.Max(0, pos - 2));
             if (style is 1 or 3 or 4 or 6 or 7 or 12) return;

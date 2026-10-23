@@ -1,15 +1,17 @@
 # 验收记录
 
-版本 0.1.5.12。验证日期 2026-10-24，Windows 10 19045 x64，200% 缩放。
+版本 0.1.5.13。验证日期 2026-10-24，Windows 10 19045 x64，200% 缩放。
 
 | 项目 | 结果 | 记录 |
 | --- | --- | --- |
-| Release x64 构建 | 0 warning，0 error | `artifacts/revision-01512-package.log` |
-| 核心测试 | 30 项通过 | `artifacts/revision-01512-build.log` |
-| 便携版应用 | 41 项通过 | `artifacts/revision-01512-portable.log` |
-| MSIX 升级、默认缓存及应用 | 41 项通过 | `artifacts/revision-01512-msix.log` |
-| 便携版连续启动 | 4 阶段通过 | `artifacts/revision-01512-session-portable.log` |
-| 安装版连续启动 | 4 阶段通过 | `artifacts/revision-01512-session-msix.log` |
+| Release x64 构建 | 0 warning，0 error | `artifacts/revision-01513-package.log` |
+| 核心测试 | 30 项通过 | `artifacts/revision-01513-build.log` |
+| 便携版应用 | 42 项通过 | `artifacts/revision-01513-portable.log` |
+| MSIX 升级、默认缓存及应用 | 42 项通过 | `artifacts/revision-01513-msix.log` |
+| 便携版连续启动 | 4 阶段通过 | `artifacts/revision-01513-session-portable.log` |
+| 安装版连续启动 | 4 阶段通过 | `artifacts/revision-01513-session-msix.log` |
+
+设置的“编辑器”页新增“自动补全括号和引号”开关，默认开启。关闭后不插入配对字符，回车缩进保持启用；旧配置保留默认行为，关闭状态能持久保存。
 
 缩进区域的 Backspace 只删除光标左侧至上一缩进列的空白，避免光标位于嵌套缩进中间时被推回整行缩进末尾。覆盖嵌套函数回车后连续退到第 0 列、空格、Tab、混合缩进、右侧 Unicode 文本及撤销；实际按键确认每次退格只处理一次，退至行首后可以输入顶层语句。尚未进行 Surface 屏幕键盘实机验证。
 
