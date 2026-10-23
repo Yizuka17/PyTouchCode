@@ -51,13 +51,15 @@ public sealed partial class MainWindow
         });
         control.Editor.DwellStart += async (_, args) => await SafeAsync(() => HoverAsync(tab, args.Position));
         control.Editor.DwellEnd += (_, _) => control.Editor.CallTipCancel();
+        AttachTouch(control, () => { tab.ShowHandles = true; UpdateSelectionHandles(tab); });
         control.PreviewKeyDown += (_, args) =>
         {
+            if (args.Key == Windows.System.VirtualKey.Back && !KeyHeld(Windows.System.VirtualKey.Control) && !KeyHeld(Windows.System.VirtualKey.Menu) && BackspaceIndent(control))
+            { args.Handled = true; return; }
             if (args.Key == Windows.System.VirtualKey.Tab && !string.IsNullOrEmpty(tab.GhostInsertion) && !control.Editor.AutoCActive())
             { string value = tab.GhostInsertion; tab.GhostInsertion = ""; ghost.Visibility = Visibility.Collapsed; control.Editor.ReplaceSel(value); args.Handled = true; }
         };
         tab.CompletionTimer.Tick += async (_, _) => { tab.CompletionTimer.Stop(); await SafeAsync(() => CompleteAsync(tab, false)); };
-        AttachTouch(control, () => { tab.ShowHandles = true; UpdateSelectionHandles(tab); });
         AttachSelectionHandle(tab, startHandle, true); AttachSelectionHandle(tab, endHandle, false);
         UpdateTab(tab);
         ScheduleSessionSave();
